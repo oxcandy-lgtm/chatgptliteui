@@ -1,0 +1,62 @@
+:root {
+  color-scheme: light dark;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, sans-serif;
+  background: #101318;
+  color: #e7eaf0;
+}
+
+.cgl-options {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.cgl-options h1 {
+  font-size: 22px;
+}
+
+.cgl-intro {
+  opacity: 0.75;
+  font-size: 14px;
+}
+
+.cgl-options section {
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  padding-top: 12px;
+  margin-top: 16px;
+}
+
+.cgl-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 8px 0;
+  font-size: 14px;
+}
+
+.cgl-actions {
+  margin-top: 20px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+button {
+  background: #1c2636;
+  color: #e7eaf0;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+  padding: 8px 14px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.cgl-status {
+  font-size: 13px;
+  opacity: 0.8;
+}

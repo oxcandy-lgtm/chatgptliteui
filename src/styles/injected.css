@@ -1,0 +1,48 @@
+/* ChatGPTLiteUI — injected presentation styles.
+ *
+ * These rules are intentionally minimal and cosmetic. They only adjust
+ * background/color/spacing/width and never remove or restructure page content.
+ * All rules are guarded by the `cgl-active` root class which the content
+ * script toggles. When the extension is disabled, no rule applies.
+ */
+
+:root.cgl-active {
+  background-color: var(--cgl-page-bg) !important;
+  color: var(--cgl-text) !important;
+}
+
+/* Narrow the conversation column to the configured width for readability. */
+:root.cgl-active [role="main"] {
+  max-width: var(--cgl-conversation-width) !important;
+  margin-inline: auto !important;
+  background-color: var(--cgl-conversation-bg) !important;
+}
+
+:root.cgl-active [data-message-author-role="user"] {
+  background-color: var(--cgl-user-bg) !important;
+}
+
+:root.cgl-active [data-message-author-role="assistant"] {
+  background-color: var(--cgl-assistant-bg) !important;
+}
+
+:root.cgl-active form textarea,
+:root.cgl-active #prompt-textarea,
+:root.cgl-active [contenteditable][role="textbox"] {
+  background-color: var(--cgl-input-bg) !important;
+  color: var(--cgl-text) !important;
+}
+
+:root.cgl-active pre,
+:root.cgl-active pre code {
+  background-color: var(--cgl-code-bg) !important;
+  color: var(--cgl-text) !important;
+}
+
+:root.cgl-active {
+  font-size: var(--cgl-font-size) !important;
+}
+
+:root.cgl-active.cgl-compact [role="main"] > * {
+  padding-block: calc(var(--cgl-spacing-scale) * 1rem) !important;
+}

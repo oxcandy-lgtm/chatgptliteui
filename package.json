@@ -1,0 +1,37 @@
+{
+  "name": "chatgptliteui",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A privacy-safe Chrome extension that adds lightweight appearance and display controls on top of the official ChatGPT web interface.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "node scripts/build-extension.mjs",
+    "safety": "node scripts/public-safety.mjs",
+    "audit:manifest": "node scripts/audit-manifest.mjs",
+    "audit:network": "node scripts/audit-network-usage.mjs",
+    "audit:dist": "node scripts/audit-dist.mjs",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:safety": "vitest run tests/security",
+    "test:watch": "vitest",
+    "ci:check": "npm run lint && npm run typecheck && npm test && npm run build && npm run audit:manifest && npm run audit:network && npm run audit:dist"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/chrome": "0.2.2",
+    "@types/jsdom": "^28.0.3",
+    "@types/node": "26.1.1",
+    "esbuild": "0.28.1",
+    "eslint": "10.7.0",
+    "globals": "17.7.0",
+    "jsdom": "29.1.1",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.64.0",
+    "vitest": "4.1.10"
+  }
+}

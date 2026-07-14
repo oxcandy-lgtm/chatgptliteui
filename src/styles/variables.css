@@ -1,0 +1,44 @@
+/* ChatGPTLiteUI — CSS custom properties.
+ *
+ * Variables are scoped under the extension-owned root class
+ * `cgl-active` so they only take effect when the extension is enabled and do
+ * not leak into the page otherwise. Content is presentation-only.
+ */
+:root.cgl-active {
+  --cgl-page-bg: #101318;
+  --cgl-conversation-bg: #151922;
+  --cgl-user-bg: #1c2636;
+  --cgl-assistant-bg: transparent;
+  --cgl-input-bg: #1c222d;
+  --cgl-code-bg: #11151c;
+  --cgl-writing-bg: #161b25;
+  --cgl-text: #e7eaf0;
+
+  /* Sizing knobs (overridden at runtime from settings). */
+  --cgl-conversation-width: 768px;
+  --cgl-font-size: 16px;
+  --cgl-spacing-scale: 1;
+}
+
+:root.cgl-active.cgl-compact {
+  --cgl-spacing-scale: 0.75;
+}
+
+:root.cgl-active.cgl-no-anim *,
+:root.cgl-active.cgl-no-anim *::before,
+:root.cgl-active.cgl-no-anim *::after {
+  animation: none !important;
+  transition: none !important;
+  scroll-behavior: auto !important;
+}
+
+:root.cgl-active.cgl-no-blur * {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  filter: none !important;
+}
+
+:root.cgl-active.cgl-no-shadow * {
+  box-shadow: none !important;
+  text-shadow: none !important;
+}

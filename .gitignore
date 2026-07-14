@@ -1,0 +1,27 @@
+# Build output
+dist/
+*.zip
+
+# Dependencies
+node_modules/
+
+# Test / coverage
+coverage/
+*.tsbuildinfo
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+
+# Local secrets / env
+.env
+.env.*
+*.local
+
+# Logs
+npm-debug.log*
+*.log
+
+# Local deny lists for the scanner (project-specific forbidden terms)
+*_PRIVATE_DENYLIST_FILE

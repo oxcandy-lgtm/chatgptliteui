@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="popup.css" />
+    <title>ChatGPTLiteUI</title>
+  </head>
+  <body>
+    <main class="cgl-popup">
+      <h1 class="cgl-title">ChatGPTLiteUI</h1>
+
+      <label class="cgl-row">
+        <span>Extension enabled</span>
+        <input type="checkbox" id="enabled" />
+      </label>
+
+      <label class="cgl-row">
+        <span>Preset</span>
+        <select id="preset">
+          <option value="normal">Normal</option>
+          <option value="minimal">Minimal</option>
+          <option value="work">Work</option>
+          <option value="ultra-lite">Ultra Lite</option>
+        </select>
+      </label>
+
+      <p class="cgl-note" id="status">Loading settings…</p>
+      <a class="cgl-link" id="open-options" href="#">Open options</a>
+    </main>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>
