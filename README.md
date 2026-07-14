@@ -6,21 +6,37 @@ not replace ChatGPT, does not proxy its traffic, and does not read, store, or
 transmit any conversation content.
 
 This repository currently contains the **Phase 0 public-safety and extension
-foundation**. Product features (sidebar control, copy helpers, code/long-response
-folding, history limiting, and memory-reduction experiments) are planned but
-not yet implemented. See [`docs/implementation-plan.md`](docs/implementation-plan.md).
+foundation** and the **Phase 2 minimal appearance controls**. Product features
+(sidebar control, copy helpers, code/long-response folding, history limiting,
+and memory-reduction experiments) are planned but not yet implemented. See
+[`docs/implementation-plan.md`](docs/implementation-plan.md).
 
-## What it does today (Phase 0)
+## What it does today (Phase 2)
 
 - Loads presentation settings from `chrome.storage.local`.
-- Adds an extension-owned root class (`cgl-active`) and harmless CSS variables.
-- Exposes a minimal popup (enable/disable, preset) and an options page
-  (appearance subset: animations, blur, shadows, spacing, width, font size,
-  theme colors).
-- Reacts to storage changes and restores the original page appearance when
-  disabled.
+- Applies appearance-only controls through extension-owned root classes
+  (`cgl-active` and opt-in toggles), scoped `--cgl-*` CSS variables, and
+  `data-cgl-*` surface markers.
+- Presets affect **appearance only**: `normal` (official ChatGPT UI, no
+  overrides), `minimal`, `work`, `ultra-lite`. Manual edits derive a `custom`
+  state automatically.
+- Exposes a compact popup (enable/disable, preset) and a complete options page
+  (rendering, layout, and theme controls).
+- Reacts to storage changes and **fully restores the original page appearance**
+  when disabled, on the Normal preset, on route teardown, or on lifecycle
+  teardown.
 - Makes **no external network requests** and performs **no destructive DOM
   operations**.
+
+> **Normal / default does not modify ChatGPT.** A default install applies no
+> visual overrides. Theme colors are only applied when the custom theme toggle
+> is enabled.
+
+## Deferred (not in this release)
+
+Sidebar control, writing-block copy controls, code/long-response folding,
+history limiting, image unloading, DOM removal, and memory reduction remain
+deferred. Memory reduction is **not** claimed.
 
 ## Privacy posture
 

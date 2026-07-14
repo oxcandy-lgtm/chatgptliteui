@@ -17,12 +17,12 @@ describe("ThemeApplier", () => {
     delete g.window;
   });
 
-  it("adds extension-owned class and custom properties when enabled", () => {
+  it("adds extension-owned class and scoped custom properties when enabled", () => {
     const applier = new ThemeApplier(dom.window.document.documentElement);
     applier.apply({
       enabled: true,
       preset: "normal",
-      appearance: { disableAnimations: true, disableBlur: false, disableShadows: false, conversationWidth: 800, fontSize: 15, compactSpacing: true },
+      appearance: { disableAnimations: true, disableBlur: false, disableShadows: false, compactSpacing: true, useConversationWidth: true, conversationWidth: 800, useFontSize: true, fontSize: 15, useTheme: true },
       sidebar: { mode: "visible" },
       history: { enabled: false, visiblePairs: 20, mode: "safe" },
       writingCopy: { enabled: false, position: "middle-right", shortcutEnabled: true },
@@ -33,7 +33,12 @@ describe("ThemeApplier", () => {
     expect(root.classList.contains("cgl-active")).toBe(true);
     expect(root.classList.contains("cgl-compact")).toBe(true);
     expect(root.classList.contains("cgl-no-anim")).toBe(true);
+    expect(root.classList.contains("cgl-width")).toBe(true);
+    expect(root.classList.contains("cgl-font")).toBe(true);
+    expect(root.classList.contains("cgl-theme")).toBe(true);
     expect(root.style.getPropertyValue("--cgl-page-bg")).toBe("#101010");
+    expect(root.style.getPropertyValue("--cgl-conversation-width")).toBe("800px");
+    expect(root.style.getPropertyValue("--cgl-font-size")).toBe("15px");
   });
 
   it("fully removes extension classes and properties when disabled", () => {
@@ -41,16 +46,41 @@ describe("ThemeApplier", () => {
     applier.apply({
       enabled: true,
       preset: "normal",
-      appearance: { disableAnimations: true, disableBlur: false, disableShadows: false, conversationWidth: 800, fontSize: 15, compactSpacing: true },
+      appearance: { disableAnimations: true, disableBlur: false, disableShadows: false, compactSpacing: true, useConversationWidth: false, conversationWidth: 800, useFontSize: false, fontSize: 15, useTheme: false },
       sidebar: { mode: "visible" },
       history: { enabled: false, visiblePairs: 20, mode: "safe" },
       writingCopy: { enabled: false, position: "middle-right", shortcutEnabled: true },
       codeBlocks: { autoCollapse: false, collapseAfterLines: 40 },
       theme: { pageBackground: "#101010", conversationBackground: "#111111", userBackground: "#222222", assistantBackground: "transparent", inputBackground: "#333333", codeBackground: "#444444", writingBlockBackground: "#555555", textColor: "#eeeeee" },
     } as never);
-    applier.remove();
+    applier.restore();
     const root = dom.window.document.documentElement;
     expect(root.classList.contains("cgl-active")).toBe(false);
+    expect(root.style.getPropertyValue("--cgl-page-bg")).toBe("");
+  });
+
+  it("Normal preset adds only the active guard and no override classes", () => {
+    const applier = new ThemeApplier(dom.window.document.documentElement);
+    applier.apply({
+      enabled: true,
+      preset: "normal",
+      appearance: { disableAnimations: false, disableBlur: false, disableShadows: false, compactSpacing: false, useConversationWidth: false, conversationWidth: 768, useFontSize: false, fontSize: 16, useTheme: false },
+      sidebar: { mode: "visible" },
+      history: { enabled: false, visiblePairs: 20, mode: "safe" },
+      writingCopy: { enabled: false, position: "middle-right", shortcutEnabled: true },
+      codeBlocks: { autoCollapse: false, collapseAfterLines: 40 },
+      theme: { pageBackground: "#101010", conversationBackground: "#111111", userBackground: "#222222", assistantBackground: "transparent", inputBackground: "#333333", codeBackground: "#444444", writingBlockBackground: "#555555", textColor: "#eeeeee" },
+    } as never);
+    const root = dom.window.document.documentElement;
+    expect(root.classList.contains("cgl-active")).toBe(true);
+    // No visual override flags should be set for Normal.
+    expect(root.classList.contains("cgl-no-anim")).toBe(false);
+    expect(root.classList.contains("cgl-no-blur")).toBe(false);
+    expect(root.classList.contains("cgl-no-shadow")).toBe(false);
+    expect(root.classList.contains("cgl-compact")).toBe(false);
+    expect(root.classList.contains("cgl-width")).toBe(false);
+    expect(root.classList.contains("cgl-font")).toBe(false);
+    expect(root.classList.contains("cgl-theme")).toBe(false);
     expect(root.style.getPropertyValue("--cgl-page-bg")).toBe("");
   });
 });

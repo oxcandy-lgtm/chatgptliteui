@@ -20,6 +20,7 @@ import {
  */
 export interface ChatGptAdapter {
   detectConversationContainer(): DetectionResult;
+  detectConversationColumn(): DetectionResult;
   detectSidebar(): DetectionResult;
   detectComposer(): DetectionResult;
   detectGeneratingIndicator(): DetectionResult;
@@ -55,6 +56,12 @@ function runTarget(
 export class DefaultChatGptAdapter implements ChatGptAdapter {
   detectConversationContainer(): DetectionResult {
     return runTarget("conversationContainer", document);
+  }
+
+  detectConversationColumn(): DetectionResult {
+    // Conversation column detection requires ambiguity refusal: if the
+    // strategy is ambiguous we keep the official UI untouched.
+    return runTarget("conversationColumn", document);
   }
 
   detectSidebar(): DetectionResult {

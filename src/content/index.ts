@@ -7,14 +7,15 @@ import { debounce } from "../shared/debounce.js";
 import { logger } from "../shared/logger.js";
 
 /**
- * Content script entry point (Phase 0 minimal runtime).
+ * Content script entry point (Phase 2 appearance controls).
  *
- * Responsibilities in this phase:
+ * Responsibilities:
  *  - load settings;
- *  - add/remove the extension-owned root class on document.documentElement;
- *  - inject harmless CSS variables (via class + custom properties);
+ *  - apply appearance via extension-owned root classes, `--cgl-*` custom
+ *    properties, and `data-cgl-*` surface markers;
  *  - react to chrome.storage.onChanged;
- *  - restore original page appearance when disabled;
+ *  - restore the official ChatGPT appearance when disabled, on the Normal
+ *    preset, on route teardown, or on lifecycle teardown;
  *  - detect SPA route changes and re-apply non-destructively.
  *
  * It performs NO destructive DOM operations and makes NO external network
@@ -26,68 +27,20 @@ const applier = new ThemeApplier();
 const adapter = createAdapter();
 const routeListener = new RouteListener();
 
-let conversationObserver: MutationObserver | null = null;
 const debouncedApply = debounce((s: Settings) => applier.apply(s), 120);
 
-function narrowContainer(): HTMLElement | null {
-  const result = adapter.detectConversationContainer();
-  return result.found ? result.element : null;
-}
-
-/** Build a scoped MutationObserver once the conversation container exists. */
-function ensureObserver(): void {
-  if (conversationObserver) return;
-  const container = narrowContainer();
-  const target: Node = container ?? document.body;
-  conversationObserver = new MutationObserver((mutations) => {
-    // Inspect only added nodes, not the entire document.
-    let touched = false;
-    for (const m of mutations) {
-      if (m.addedNodes.length > 0) {
-        touched = true;
-        break;
-      }
-    }
-    if (!touched) return;
-    // Re-check route signature on structural changes (cheap path).
-    routeListener.check();
-  });
-  conversationObserver.observe(target, { childList: true, subtree: true });
-}
-
-/** Tear down observers and extension-owned UI without destroying page DOM. */
-function teardown(): void {
-  if (conversationObserver) {
-    conversationObserver.disconnect();
-    conversationObserver = null;
-  }
-  applier.remove();
-}
-
-function applyAndObserve(settings: Settings): void {
-  applier.apply(settings);
-  if (settings.enabled) {
-    ensureObserver();
-  } else {
-    if (conversationObserver) {
-      conversationObserver.disconnect();
-      conversationObserver = null;
-    }
-  }
+/** Re-apply current settings after a route change: restore first, then apply. */
+function reapplyAfterRouteChange(): void {
+  adapter.refresh();
+  void getSettings().then((s) => applier.apply(s));
 }
 
 async function bootstrap(): Promise<void> {
   const settings = await getSettings();
-  applyAndObserve(settings);
+  applier.apply(settings);
 
   routeListener.onChange(() => {
-    // On route change: tear down observers/UI refs, re-run discovery, reapply.
-    if (conversationObserver) {
-      conversationObserver.disconnect();
-      conversationObserver = null;
-    }
-    adapter.refresh();
-    void getSettings().then(applyAndObserve);
+    reapplyAfterRouteChange();
   });
   routeListener.start();
 
@@ -106,11 +59,13 @@ async function bootstrap(): Promise<void> {
   logger.info("content", "Lite UI content script active", { enabled: settings.enabled });
 }
 
-if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", () => void bootstrap(), { once: true });
-} else {
-  void bootstrap();
-}
-
 // Exposed for tests only (does not run any side effects on import).
-export { applier, adapter, routeListener, teardown, ensureObserver, narrowContainer };
+export { applier, adapter, routeListener, reapplyAfterRouteChange };
+
+if (typeof document !== "undefined") {
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", () => void bootstrap(), { once: true });
+  } else {
+    void bootstrap();
+  }
+}

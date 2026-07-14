@@ -1,7 +1,9 @@
 import type { PresetName, Settings } from "../shared/types.js";
 import { getSettings, updateSettings } from "../settings/storage.js";
-
-const PRESETS: PresetName[] = ["normal", "minimal", "work", "ultra-lite"];
+import {
+  applyAppearancePreset,
+  detectAppearancePreset,
+} from "../features/appearance/presets.js";
 
 function bind(): void {
   const enabled = document.getElementById("enabled") as HTMLInputElement | null;
@@ -25,11 +27,20 @@ function bind(): void {
         });
       });
     }
-    if (preset && PRESETS.includes(settings.preset)) {
-      preset.value = settings.preset;
+    if (preset) {
+      // Reflect current preset, including a derived "custom" state.
+      const current = detectAppearancePreset(settings);
+      preset.value = current;
       preset.addEventListener("change", () => {
-        void updateSettings({ preset: preset.value as PresetName }).then(() => {
-          if (status) status.textContent = "Saved.";
+        const value = preset.value as PresetName;
+        if (value === "custom") {
+          preset.value = current;
+          return;
+        }
+        void updateSettings(
+          applyAppearancePreset(settings, value as Exclude<PresetName, "custom">),
+        ).then(() => {
+          if (status) status.textContent = `Applied ${value}.`;
         });
       });
     }
@@ -37,8 +48,10 @@ function bind(): void {
   });
 }
 
-if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", bind, { once: true });
-} else {
-  bind();
+if (typeof document !== "undefined") {
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", bind, { once: true });
+  } else {
+    bind();
+  }
 }

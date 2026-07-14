@@ -25,13 +25,34 @@ Establish the public OSS safety baseline:
   popup and options pages, storage listener, SPA route lifecycle.
 - No external network requests; no destructive DOM operations.
 
-## Phase 2 — Minimal appearance controls
+## Phase 2 — Minimal appearance controls (implemented)
 
-- Animation/transition/smooth-scroll disabling.
-- Shadow and blur removal.
-- Conversation width, font size, compact spacing.
-- Background and text color theming via CSS variables.
-- Settings persistence and "restore original UI" switch.
+Appearance-only controls, applied through extension-owned markers and CSS
+variables. No ChatGPT class is ever altered.
+
+- Animation / transition / smooth-scroll disabling (opt-in, broad but guarded
+  by the `cgl-no-anim` root class).
+- Blur reduction: disables `backdrop-filter` only (ordinary `filter` is left
+  intact so icons/disabled states keep their meaning).
+- Shadow reduction: disables `box-shadow` and `text-shadow`.
+- Compact conversation spacing (scoped to message surfaces, never controls).
+- Conversation width applied only to marked conversation/message/composer
+  surfaces via `min(100%, var(--cgl-conversation-width))`; sidebar, dialogs,
+  and modals are never resized.
+- Font size scoped to user/assistant messages, composer, and code — never
+  `:root`.
+- Background and text color theming via scoped `--cgl-*` variables and
+  `data-cgl-*` markers (page, conversation, user, assistant, input, code,
+  text). Writing-block background is reserved for Phase 4 and not applied.
+- Presets (`normal`, `minimal`, `work`, `ultra-lite`) are appearance-only and
+  never touch deferred feature fields; manual edits derive `custom`.
+- Settings schema v2 with fail-closed validation, bounded integer fields, and a
+  conservative color grammar. Deterministic v1→v2 migration.
+- Complete restoration contract: disabling, Normal preset, route teardown, and
+  lifecycle teardown all remove every `cgl-*` class, `--cgl-*` variable, and
+  `data-cgl-*` marker idempotently.
+- No external network requests; no new Chrome permission; no chat content
+  persisted.
 
 ## Phase 3 — Sidebar control
 
