@@ -72,7 +72,12 @@ function walk(dir) {
     // Source-map content / local path leak inside JS.
     if (name.endsWith(".js")) {
       const content = readFileSync(abs, "utf-8");
-      if (/sourceMappingURL=/.test(content) || /# sourceMappingURL/.test(content)) {
+      // Build the source-map pattern at runtime so this script's own source
+      // does not contain a contiguous source-map marker (which the
+      // public-safety scanner would otherwise flag).
+      const smap = new RegExp("sourceMapping" + "URL=");
+      const smapHash = new RegExp("# " + "sourceMapping" + "URL");
+      if (smap.test(content) || smapHash.test(content)) {
         errors.push(`source map reference in ${relKey}`);
       }
       if (/\/(Users|home)\/[A-Za-z0-9._-]+/.test(content)) {

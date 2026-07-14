@@ -55,6 +55,9 @@ const HEX_COLOR = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i;
 // High-entropy detection is CONTEXTUAL (see rules below).
 
 // --- rule definitions -------------------------------------------------------
+// RULES-START: the exact rule-declaration block below is the ONLY surface the
+// scanner self-exempts (narrow exemption). Prohibited values placed on any
+// other line of this file are still detected.
 /**
  * Each rule: { id, category, test(line) => boolean }
  * test must return true when a VIOLATION is present.
@@ -176,6 +179,7 @@ const RULES = [
     test: (l) => /sourceMappingURL=|sourcesContent:|^\/\/# sourceMappingURL=.*\.map/.test(l),
   },
 ];
+// RULES-END: end of the narrow self-exempt rule-declaration block.
 
 // --- file collection --------------------------------------------------------
 function git(args) {
@@ -207,15 +211,9 @@ function collectFiles() {
   if (!gitWorked) {
     walkDir(root, files);
   }
-  // CI tooling and test fixtures are not published artifacts and must never be
-  // scanned (they contain synthetic secret-like values by design, and the
-  // scanner must not self-trigger on its own rule definitions).
-  for (const excluded of ["scripts", "tests"]) {
-    files.delete(excluded);
-    for (const f of [...files]) {
-      if (f.startsWith(`${excluded}/`)) files.delete(f);
-    }
-  }
+  // NOTE: scripts/ and tests/ are intentionally scanned. The scanner must not
+  // exempt whole directories. Narrow self-exemption (below) handles only the
+  // exact rule-definition lines of the scanner's own source.
   // Always include critical root/config paths even if git is absent.
   for (const p of [
     "manifest.json",
@@ -230,6 +228,30 @@ function collectFiles() {
     if (existsSync(join(root, p))) files.add(p);
   }
   return [...files];
+}
+
+// --- narrow self-exemption -------------------------------------------------
+// The scanner must scan every public source surface, including its own file.
+// To avoid self-triggering on the exact lines that DECLARE its rules (which
+// necessarily contain regexes that match secret-like patterns), we skip ONLY
+// the lines between the RULES-START and RULES-END markers in this file. The
+// markers are explicit and tested. Any prohibited value placed on a DIFFERENT
+// line within this file (or anywhere else) is still detected.
+const SELF_EXEMPT = new Set();
+{
+  const selfPath = join(root, "scripts", "public-safety.mjs");
+  if (existsSync(selfPath)) {
+    const selfLines = readFileSync(selfPath, "utf-8").split(/\r?\n/);
+    let inBlock = false;
+    for (let i = 0; i < selfLines.length; i++) {
+      const text = selfLines[i];
+      if (!inBlock && text.includes("RULES-START")) inBlock = true;
+      if (inBlock) {
+        SELF_EXEMPT.add(`scripts/public-safety.mjs:${i + 1}`);
+        if (text.includes("RULES-END")) break;
+      }
+    }
+  }
 }
 
 function walkDir(dir, out) {
@@ -276,6 +298,9 @@ for (const rel of collectFiles()) {
     // skip obviously allowed literals entirely
     if (ALLOWED_LITERALS.has(line.trim())) return;
     if (HEX_COLOR.test(line.trim())) return;
+    // Narrow self-exemption: skip ONLY the scanner's own rule-declaration
+    // lines (computed above). Any other line in this file is still scanned.
+    if (SELF_EXEMPT.has(`${rel}:${idx + 1}`)) return;
     for (const rule of RULES) {
       if (rule.test(line)) {
         violations++;

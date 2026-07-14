@@ -12,7 +12,12 @@ lockfiles.
 - Never prints the matched secret, personal information, or the full source
   line. It reports only: file path, line number, rule ID, and a redacted
   category.
-- The scanner must not self-trigger on its own rule definitions.
+- The scanner must not self-trigger on its own rule definitions. This is
+  handled by a **narrow exemption**: only the lines between the `RULES-START`
+  and `RULES-END` markers in `scripts/public-safety.mjs` are skipped. Every
+  other line of that file, and every file under `scripts/` and `tests/`, is
+  fully scanned. A prohibited value placed outside the rule-declaration block
+  is still detected (proven by regression tests).
 
 ## Detected categories
 
