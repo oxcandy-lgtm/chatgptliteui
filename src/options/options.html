@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="options.css" />
+    <title>ChatGPTLiteUI — Options</title>
+  </head>
+  <body>
+    <main class="cgl-options">
+      <h1>ChatGPTLiteUI — Options</h1>
+      <p class="cgl-intro">
+        These controls adjust only presentation. No chat content is read,
+        stored, or transmitted by this extension.
+      </p>
+
+      <section>
+        <h2>General</h2>
+        <label class="cgl-row">
+          <span>Extension enabled</span>
+          <input type="checkbox" id="enabled" />
+        </label>
+        <label class="cgl-row">
+          <span>Preset</span>
+          <select id="preset">
+            <option value="normal">Normal</option>
+            <option value="minimal">Minimal</option>
+            <option value="work">Work</option>
+            <option value="ultra-lite">Ultra Lite</option>
+          </select>
+        </label>
+      </section>
+
+      <section>
+        <h2>Appearance</h2>
+        <label class="cgl-row">
+          <span>Disable animations</span>
+          <input type="checkbox" id="disableAnimations" />
+        </label>
+        <label class="cgl-row">
+          <span>Disable blur</span>
+          <input type="checkbox" id="disableBlur" />
+        </label>
+        <label class="cgl-row">
+          <span>Disable shadows</span>
+          <input type="checkbox" id="disableShadows" />
+        </label>
+        <label class="cgl-row">
+          <span>Compact spacing</span>
+          <input type="checkbox" id="compactSpacing" />
+        </label>
+        <label class="cgl-row">
+          <span>Conversation width (px)</span>
+          <input type="number" id="conversationWidth" min="480" max="1600" step="8" />
+        </label>
+        <label class="cgl-row">
+          <span>Font size (px)</span>
+          <input type="number" id="fontSize" min="12" max="24" step="1" />
+        </label>
+      </section>
+
+      <section>
+        <h2>Theme (colors)</h2>
+        <label class="cgl-row">
+          <span>Page background</span>
+          <input type="color" id="pageBackground" />
+        </label>
+        <label class="cgl-row">
+          <span>Conversation background</span>
+          <input type="color" id="conversationBackground" />
+        </label>
+        <label class="cgl-row">
+          <span>Text color</span>
+          <input type="color" id="textColor" />
+        </label>
+      </section>
+
+      <div class="cgl-actions">
+        <button id="save" type="button">Save</button>
+        <button id="reset" type="button">Reset to defaults</button>
+        <span id="status" class="cgl-status"></span>
+      </div>
+    </main>
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

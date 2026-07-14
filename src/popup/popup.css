@@ -1,0 +1,43 @@
+:root {
+  color-scheme: light dark;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, sans-serif;
+  background: #151922;
+  color: #e7eaf0;
+}
+
+.cgl-popup {
+  width: 280px;
+  padding: 16px;
+  box-sizing: border-box;
+}
+
+.cgl-title {
+  font-size: 16px;
+  margin: 0 0 12px;
+}
+
+.cgl-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 8px 0;
+  font-size: 14px;
+}
+
+.cgl-note {
+  font-size: 12px;
+  opacity: 0.7;
+  margin-top: 12px;
+}
+
+.cgl-link {
+  display: inline-block;
+  margin-top: 8px;
+  font-size: 13px;
+  color: #7aa2ff;
+}

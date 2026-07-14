@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Synthetic Chat Fixture (no real content)</title>
+  </head>
+  <!--
+    SYNTHETIC FIXTURE ONLY.
+    This document contains NO real ChatGPT markup, NO real conversations, and
+    NO personal data. It is a generic stand-in used by tests to exercise the
+    Adapter's selectors and lifecycle logic against realistic but invented
+    structure.
+  -->
+  <body>
+    <nav aria-label="chat history">history placeholder</nav>
+
+    <main role="main">
+      <section data-testid="thread" aria-label="conversation">
+        <article data-message-author-role="user">
+          <p>Synthetic user message placeholder.</p>
+        </article>
+        <article data-message-author-role="assistant">
+          <p>Synthetic assistant message placeholder.</p>
+          <pre><code>function synthetic() { return 0; }</code></pre>
+          <button aria-label="copy">copy</button>
+        </article>
+        <article data-message-author-role="user">
+          <p>Another synthetic user message.</p>
+        </article>
+        <article data-message-author-role="assistant">
+          <p>Another synthetic assistant message.</p>
+        </article>
+      </section>
+    </main>
+
+    <form>
+      <textarea id="prompt-textarea" aria-label="prompt"></textarea>
+    </form>
+
+    <button aria-label="Stop generating">stop</button>
+  </body>
+</html>
