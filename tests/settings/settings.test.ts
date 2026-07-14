@@ -45,6 +45,81 @@ describe("settings schema validation", () => {
   });
 });
 
+describe("settings schema v2 specifics", () => {
+  it("accepts neutral normal defaults (no visual overrides)", () => {
+    const d = cloneDefaults();
+    expect(d.preset).toBe("normal");
+    expect(d.appearance.disableAnimations).toBe(false);
+    expect(d.appearance.useTheme).toBe(false);
+    expect(d.appearance.useConversationWidth).toBe(false);
+    expect(d.appearance.useFontSize).toBe(false);
+    expect(validateSettings(d)).toBe(true);
+  });
+
+  it("rejects out-of-range numeric bounds", () => {
+    const bad = cloneDefaults();
+    bad.appearance.conversationWidth = 100;
+    expect(validateSettings(bad)).toBe(false);
+    const bad2 = cloneDefaults();
+    bad2.appearance.conversationWidth = 2000;
+    expect(validateSettings(bad2)).toBe(false);
+    const bad3 = cloneDefaults();
+    bad3.appearance.fontSize = 9;
+    expect(validateSettings(bad3)).toBe(false);
+  });
+
+  it("rejects fractional and non-integer numeric values", () => {
+    const bad = cloneDefaults();
+    bad.appearance.conversationWidth = 800.5;
+    expect(validateSettings(bad)).toBe(false);
+    const bad2 = cloneDefaults();
+    bad2.appearance.fontSize = Number.NaN;
+    expect(validateSettings(bad2)).toBe(false);
+    const bad3 = cloneDefaults();
+    bad3.appearance.fontSize = Infinity;
+    expect(validateSettings(bad3)).toBe(false);
+  });
+
+  it("accepts safe color grammar (#rgb, #rrggbb, #rrggbbaa, transparent)", () => {
+    const ok = cloneDefaults();
+    ok.theme.pageBackground = "#abc";
+    ok.theme.conversationBackground = "#abcdef";
+    ok.theme.textColor = "#abcdef01";
+    ok.theme.assistantBackground = "transparent";
+    expect(validateSettings(ok)).toBe(true);
+  });
+
+  it("rejects malicious/invalid CSS color values", () => {
+    const bad = cloneDefaults();
+    bad.theme.pageBackground = "red; background:url(evil)";
+    expect(validateSettings(bad)).toBe(false);
+    const bad2 = cloneDefaults();
+    bad2.theme.textColor = "var(--evil)";
+    expect(validateSettings(bad2)).toBe(false);
+    const bad3 = cloneDefaults();
+    bad3.theme.codeBackground = "calc(1px + 2px)";
+    expect(validateSettings(bad3)).toBe(false);
+    const bad4 = cloneDefaults();
+    bad4.theme.inputBackground = "#fff} {";
+    expect(validateSettings(bad4)).toBe(false);
+  });
+
+  it("rejects assistant background that is not transparent or opaque hex", () => {
+    const bad = cloneDefaults();
+    bad.theme.assistantBackground = "rgba(0,0,0,0.5)";
+    expect(validateSettings(bad)).toBe(false);
+  });
+
+  it("rejects unknown top-level and nested keys", () => {
+    const bad = cloneDefaults() as unknown as Record<string, unknown>;
+    (bad.appearance as Record<string, unknown>).unknownFlag = true;
+    expect(validateSettings(bad)).toBe(false);
+    const bad2 = cloneDefaults() as unknown as Record<string, unknown>;
+    bad2.newSection = { x: 1 };
+    expect(validateSettings(bad2)).toBe(false);
+  });
+});
+
 describe("mergeSettings", () => {
   it("performs a validated deep merge of nested sections", () => {
     const base = cloneDefaults();

@@ -20,6 +20,7 @@ import type { Confidence } from "../shared/types.js";
 
 export type SelectorTarget =
   | "conversationContainer"
+  | "conversationColumn"
   | "userTurn"
   | "assistantTurn"
   | "sidebar"
@@ -119,6 +120,26 @@ export const STRATEGIES: Record<SelectorTarget, SelectorStrategy[]> = {
       cardinality: "single",
       requireVisible: true,
       confidence: "medium",
+    },
+  ],
+  conversationColumn: [
+    {
+      id: "thread-column-semantic",
+      root: "document",
+      // Semantic, single, visible column that holds the conversation content.
+      selector: '[data-testid="thread"] > [role="presentation"], main [class*="thread"] > div',
+      cardinality: "single",
+      requireVisible: true,
+      confidence: "medium",
+    },
+    {
+      id: "role-main-inner",
+      root: "document",
+      // The primary inner content wrapper of the conversation main region.
+      selector: '[role="main"] > div',
+      cardinality: "single",
+      requireVisible: true,
+      confidence: "low",
     },
   ],
   userTurn: [

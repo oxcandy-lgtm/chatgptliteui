@@ -2,47 +2,93 @@
  *
  * These rules are intentionally minimal and cosmetic. They only adjust
  * background/color/spacing/width and never remove or restructure page content.
- * All rules are guarded by the `cgl-active` root class which the content
- * script toggles. When the extension is disabled, no rule applies.
+ *
+ * Every rule is guarded by an extension-owned root class (cgl-active and the
+ * opt-in toggles) and, where it styles page content, by extension-owned
+ * data-cgl-* markers. When the extension is disabled or on the Normal preset,
+ * no rule applies and the official ChatGPT appearance is fully restored.
  */
 
-:root.cgl-active {
-  background-color: var(--cgl-page-bg) !important;
-  color: var(--cgl-text) !important;
+/* ---- animation / transition / smooth-scroll reduction (opt-in) ---- */
+:root.cgl-active.cgl-no-anim *,
+:root.cgl-active.cgl-no-anim *::before,
+:root.cgl-active.cgl-no-anim *::after {
+  animation: none !important;
+  transition: none !important;
+  scroll-behavior: auto !important;
 }
 
-/* Narrow the conversation column to the configured width for readability. */
-:root.cgl-active [role="main"] {
-  max-width: var(--cgl-conversation-width) !important;
-  margin-inline: auto !important;
-  background-color: var(--cgl-conversation-bg) !important;
+/* ---- blur reduction: backdrop-filter only, page-wide (NOT ordinary filter) ---- */
+:root.cgl-active.cgl-no-blur *,
+:root.cgl-active.cgl-no-blur *::before,
+:root.cgl-active.cgl-no-blur *::after {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
 }
 
-:root.cgl-active [data-message-author-role="user"] {
-  background-color: var(--cgl-user-bg) !important;
+/* ---- shadow reduction (opt-in) ---- */
+:root.cgl-active.cgl-no-shadow [data-cgl-conversation-root],
+:root.cgl-active.cgl-no-shadow [data-cgl-composer],
+:root.cgl-active.cgl-no-shadow [data-cgl-user-turn],
+:root.cgl-active.cgl-no-shadow [data-cgl-assistant-turn] {
+  box-shadow: none !important;
+  text-shadow: none !important;
 }
 
-:root.cgl-active [data-message-author-role="assistant"] {
-  background-color: var(--cgl-assistant-bg) !important;
+/* ---- conversation width: only the safely detected conversation column ----
+ * Never applied to [data-cgl-conversation-root] (which may be the entire
+ * [role="main"] application shell) nor to a low-confidence column. */
+:root.cgl-active.cgl-width [data-cgl-conversation-column] {
+  max-width: min(100%, var(--cgl-conversation-width));
+  margin-inline: auto;
 }
 
-:root.cgl-active form textarea,
-:root.cgl-active #prompt-textarea,
-:root.cgl-active [contenteditable][role="textbox"] {
-  background-color: var(--cgl-input-bg) !important;
-  color: var(--cgl-text) !important;
+/* ---- compact spacing: message surfaces only, never controls ---- */
+:root.cgl-active.cgl-compact [data-cgl-user-turn],
+:root.cgl-active.cgl-compact [data-cgl-assistant-turn] {
+  padding-block: calc(var(--cgl-spacing-scale, 0.75) * 1rem) !important;
 }
 
-:root.cgl-active pre,
-:root.cgl-active pre code {
-  background-color: var(--cgl-code-bg) !important;
-  color: var(--cgl-text) !important;
-}
-
-:root.cgl-active {
+/* ---- font size: scoped to message/composer/code, never :root ---- */
+:root.cgl-active.cgl-font [data-cgl-user-turn],
+:root.cgl-active.cgl-font [data-cgl-assistant-turn],
+:root.cgl-active.cgl-font [data-cgl-composer],
+:root.cgl-active.cgl-font [data-cgl-composer] * {
   font-size: var(--cgl-font-size) !important;
 }
+:root.cgl-active.cgl-font [data-cgl-assistant-turn] pre,
+:root.cgl-active.cgl-font [data-cgl-assistant-turn] code {
+  font-size: calc(var(--cgl-font-size) * 0.92) !important;
+}
 
-:root.cgl-active.cgl-compact [role="main"] > * {
-  padding-block: calc(var(--cgl-spacing-scale) * 1rem) !important;
+/* ---- theme (opt-in): scoped to marked surfaces only ---- */
+:root.cgl-active.cgl-theme {
+  background-color: var(--cgl-page-bg);
+}
+:root.cgl-active.cgl-theme body {
+  background-color: var(--cgl-page-bg);
+}
+:root.cgl-active.cgl-theme [data-cgl-conversation-root] {
+  background-color: var(--cgl-conversation-bg);
+}
+:root.cgl-active.cgl-theme [data-cgl-user-turn] {
+  background-color: var(--cgl-user-bg);
+}
+:root.cgl-active.cgl-theme [data-cgl-assistant-turn] {
+  background-color: var(--cgl-assistant-bg);
+}
+:root.cgl-active.cgl-theme [data-cgl-composer] {
+  background-color: var(--cgl-input-bg);
+}
+:root.cgl-active.cgl-theme [data-cgl-conversation-root],
+:root.cgl-active.cgl-theme [data-cgl-user-turn],
+:root.cgl-active.cgl-theme [data-cgl-assistant-turn],
+:root.cgl-active.cgl-theme [data-cgl-composer],
+:root.cgl-active.cgl-theme [data-cgl-composer] * {
+  color: var(--cgl-text);
+}
+:root.cgl-active.cgl-theme [data-cgl-assistant-turn] pre,
+:root.cgl-active.cgl-theme [data-cgl-assistant-turn] code {
+  background-color: var(--cgl-code-bg);
+  color: var(--cgl-text);
 }

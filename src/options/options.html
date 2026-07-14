@@ -11,7 +11,9 @@
       <h1>ChatGPTLiteUI — Options</h1>
       <p class="cgl-intro">
         These controls adjust only presentation. No chat content is read,
-        stored, or transmitted by this extension.
+        stored, or transmitted by this extension. Presets affect appearance
+        only. Sidebar, copy, folding, history, and memory features remain
+        deferred.
       </p>
 
       <section>
@@ -27,18 +29,20 @@
             <option value="minimal">Minimal</option>
             <option value="work">Work</option>
             <option value="ultra-lite">Ultra Lite</option>
+            <option value="custom" disabled>Custom (current)</option>
           </select>
         </label>
+        <button id="normal-action" type="button">Restore official UI (Normal)</button>
       </section>
 
       <section>
-        <h2>Appearance</h2>
+        <h2>Rendering</h2>
         <label class="cgl-row">
-          <span>Disable animations</span>
+          <span>Disable animations and transitions</span>
           <input type="checkbox" id="disableAnimations" />
         </label>
         <label class="cgl-row">
-          <span>Disable blur</span>
+          <span>Disable blur (backdrop-filter)</span>
           <input type="checkbox" id="disableBlur" />
         </label>
         <label class="cgl-row">
@@ -46,15 +50,27 @@
           <input type="checkbox" id="disableShadows" />
         </label>
         <label class="cgl-row">
-          <span>Compact spacing</span>
+          <span>Compact conversation spacing</span>
           <input type="checkbox" id="compactSpacing" />
         </label>
+      </section>
+
+      <section>
+        <h2>Layout</h2>
         <label class="cgl-row">
-          <span>Conversation width (px)</span>
+          <span>Enable custom conversation width</span>
+          <input type="checkbox" id="useConversationWidth" />
+        </label>
+        <label class="cgl-row">
+          <span>Conversation width (px, 480–1600)</span>
           <input type="number" id="conversationWidth" min="480" max="1600" step="8" />
         </label>
         <label class="cgl-row">
-          <span>Font size (px)</span>
+          <span>Enable custom conversation font size</span>
+          <input type="checkbox" id="useFontSize" />
+        </label>
+        <label class="cgl-row">
+          <span>Font size (px, 12–24)</span>
           <input type="number" id="fontSize" min="12" max="24" step="1" />
         </label>
       </section>
@@ -62,23 +78,51 @@
       <section>
         <h2>Theme (colors)</h2>
         <label class="cgl-row">
+          <span>Enable custom theme</span>
+          <input type="checkbox" id="useTheme" />
+        </label>
+        <label class="cgl-row">
           <span>Page background</span>
-          <input type="color" id="pageBackground" />
+          <input type="text" class="cgl-color" id="pageBackground" inputmode="text" />
         </label>
         <label class="cgl-row">
           <span>Conversation background</span>
-          <input type="color" id="conversationBackground" />
+          <input type="text" class="cgl-color" id="conversationBackground" inputmode="text" />
+        </label>
+        <label class="cgl-row">
+          <span>User-message background</span>
+          <input type="text" class="cgl-color" id="userBackground" inputmode="text" />
+        </label>
+        <label class="cgl-row">
+          <span>Assistant-message background</span>
+          <input type="text" class="cgl-color" id="assistantBackground" inputmode="text" />
+        </label>
+        <label class="cgl-row">
+          <span>Assistant background transparent</span>
+          <input type="checkbox" id="assistantTransparent" />
+        </label>
+        <label class="cgl-row">
+          <span>Input background</span>
+          <input type="text" class="cgl-color" id="inputBackground" inputmode="text" />
+        </label>
+        <label class="cgl-row">
+          <span>Code background</span>
+          <input type="text" class="cgl-color" id="codeBackground" inputmode="text" />
         </label>
         <label class="cgl-row">
           <span>Text color</span>
-          <input type="color" id="textColor" />
+          <input type="text" class="cgl-color" id="textColor" inputmode="text" />
         </label>
+        <p class="cgl-note">
+          Writing-block background is reserved for a future phase and is not
+          applied in this release.
+        </p>
       </section>
 
       <div class="cgl-actions">
         <button id="save" type="button">Save</button>
         <button id="reset" type="button">Reset to defaults</button>
-        <span id="status" class="cgl-status"></span>
+        <span id="status" class="cgl-status" role="status" aria-live="polite"></span>
       </div>
     </main>
     <script type="module" src="options.js"></script>

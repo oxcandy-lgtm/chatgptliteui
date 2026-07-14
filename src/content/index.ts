@@ -4,18 +4,22 @@ import { ThemeApplier } from "./lifecycle.js";
 import { RouteListener } from "./route-listener.js";
 import { createAdapter } from "../adapters/chatgpt-adapter.js";
 import { debounce } from "../shared/debounce.js";
+import { hasAppearanceEffects } from "../features/appearance/presets.js";
 import { logger } from "../shared/logger.js";
 
 /**
- * Content script entry point (Phase 0 minimal runtime).
+ * Content script entry point (Phase 2 appearance controls).
  *
- * Responsibilities in this phase:
+ * Responsibilities:
  *  - load settings;
- *  - add/remove the extension-owned root class on document.documentElement;
- *  - inject harmless CSS variables (via class + custom properties);
+ *  - apply appearance via extension-owned root classes, `--cgl-*` custom
+ *    properties, and `data-cgl-*` surface markers;
  *  - react to chrome.storage.onChanged;
- *  - restore original page appearance when disabled;
- *  - detect SPA route changes and re-apply non-destructively.
+ *  - restore the official ChatGPT appearance when disabled, on the Normal
+ *    preset, on route teardown, or on lifecycle teardown;
+ *  - detect SPA route changes and re-apply non-destructively;
+ *  - observe structural DOM mutations to re-mark newly generated turns and
+ *    re-apply active width/font/spacing/theme to new messages.
  *
  * It performs NO destructive DOM operations and makes NO external network
  * request. Sidebar hiding, copy controls, folding, and history limiting are
@@ -26,68 +30,100 @@ const applier = new ThemeApplier();
 const adapter = createAdapter();
 const routeListener = new RouteListener();
 
-let conversationObserver: MutationObserver | null = null;
-const debouncedApply = debounce((s: Settings) => applier.apply(s), 120);
+let observer: MutationObserver | null = null;
+let observedTarget: Node | null = null;
 
-function narrowContainer(): HTMLElement | null {
-  const result = adapter.detectConversationContainer();
-  return result.found ? result.element : null;
+/**
+ * Single coalesced marker-refresh operation. The MutationObserver callback
+ * schedules this (never a full storage read + rescan per mutation batch), so a
+ * burst of synchronous DOM mutations produces exactly one refresh after the
+ * debounce window.
+ */
+const scheduleMarkerRefresh = debounce((): void => {
+  void getSettings().then((settings) => {
+    applier.refreshMarkers(settings);
+  });
+}, 120);
+
+/** Apply settings and connect/disconnect the observer per the active profile. */
+function syncRuntime(settings: Settings): void {
+  applier.apply(settings);
+  if (settings.enabled && hasAppearanceEffects(settings)) {
+    connectObserver();
+  } else {
+    disconnectObserver();
+  }
 }
 
-/** Build a scoped MutationObserver once the conversation container exists. */
-function ensureObserver(): void {
-  if (conversationObserver) return;
-  const container = narrowContainer();
-  const target: Node = container ?? document.body;
-  conversationObserver = new MutationObserver((mutations) => {
-    // Inspect only added nodes, not the entire document.
-    let touched = false;
+/** Apply current settings; used on bootstrap, storage change, and route change. */
+function applyCurrent(): void {
+  void getSettings().then(syncRuntime);
+}
+
+/** Attach a scoped observer to the narrowest available stable root. */
+function connectObserver(): void {
+  const target: Node = adapter.detectConversationContainer().element ?? document.body;
+  if (observedTarget === target && observer) return; // already observing
+  if (observer) observer.disconnect();
+  observer = new MutationObserver((mutations) => {
+    let added = false;
     for (const m of mutations) {
       if (m.addedNodes.length > 0) {
-        touched = true;
-        break;
+        for (const node of Array.from(m.addedNodes)) {
+          if (node.nodeType === Node.ELEMENT_NODE) {
+            added = true;
+            break;
+          }
+        }
       }
+      if (added) break;
     }
-    if (!touched) return;
-    // Re-check route signature on structural changes (cheap path).
+    if (!added) return;
+    // Cheap path: re-check route signature on structural changes.
     routeListener.check();
+    // Reconnect to a narrower container if it just appeared.
+    const narrower = adapter.detectConversationContainer().element;
+    if (narrower && narrower !== observedTarget) {
+      connectObserver();
+    }
+    // Coalesce marker refresh into one debounced operation.
+    scheduleMarkerRefresh();
   });
-  conversationObserver.observe(target, { childList: true, subtree: true });
+  observedTarget = target;
+  observer.observe(target, { childList: true, subtree: true });
+}
+
+/** Disconnect the active observer (Normal / disabled). Idempotent. */
+function disconnectObserver(): void {
+  if (observer) {
+    observer.disconnect();
+    observer = null;
+  }
+  observedTarget = null;
 }
 
 /** Tear down observers and extension-owned UI without destroying page DOM. */
 function teardown(): void {
-  if (conversationObserver) {
-    conversationObserver.disconnect();
-    conversationObserver = null;
-  }
-  applier.remove();
+  // Cancel any pending debounced refresh so it cannot re-mark the DOM after
+  // teardown.
+  scheduleMarkerRefresh.cancel();
+  disconnectObserver();
+  applier.restore();
 }
 
-function applyAndObserve(settings: Settings): void {
-  applier.apply(settings);
-  if (settings.enabled) {
-    ensureObserver();
-  } else {
-    if (conversationObserver) {
-      conversationObserver.disconnect();
-      conversationObserver = null;
-    }
-  }
+/** Re-apply after a route change: restore markers, refresh, re-sync. */
+function reapplyAfterRouteChange(): void {
+  applier.restore();
+  adapter.refresh();
+  applyCurrent();
 }
 
 async function bootstrap(): Promise<void> {
   const settings = await getSettings();
-  applyAndObserve(settings);
+  syncRuntime(settings);
 
   routeListener.onChange(() => {
-    // On route change: tear down observers/UI refs, re-run discovery, reapply.
-    if (conversationObserver) {
-      conversationObserver.disconnect();
-      conversationObserver = null;
-    }
-    adapter.refresh();
-    void getSettings().then(applyAndObserve);
+    reapplyAfterRouteChange();
   });
   routeListener.start();
 
@@ -95,22 +131,32 @@ async function bootstrap(): Promise<void> {
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area !== "local") return;
       if (!("settings" in changes)) return;
-      const envelope = changes.settings.newValue;
-      if (envelope && typeof envelope === "object" && "settings" in envelope) {
-        const incoming = (envelope as { settings?: Settings }).settings;
-        if (incoming) debouncedApply(incoming);
-      }
+      // Reload through the validated path rather than trusting a raw cast of
+      // changes.settings.newValue.
+      void getSettings().then(syncRuntime);
     });
   }
 
-  logger.info("content", "Lite UI content script active", { enabled: settings.enabled });
-}
-
-if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", () => void bootstrap(), { once: true });
-} else {
-  void bootstrap();
+  logger.info("content", "Lite UI content script active", {});
 }
 
 // Exposed for tests only (does not run any side effects on import).
-export { applier, adapter, routeListener, teardown, ensureObserver, narrowContainer };
+export {
+  applier,
+  adapter,
+  routeListener,
+  connectObserver,
+  disconnectObserver,
+  teardown,
+  reapplyAfterRouteChange,
+  syncRuntime,
+  scheduleMarkerRefresh,
+};
+
+if (typeof document !== "undefined") {
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", () => void bootstrap(), { once: true });
+  } else {
+    void bootstrap();
+  }
+}
