@@ -195,21 +195,34 @@ function bind(): void {
   save.addEventListener("click", () => {
     // Read fresh settings first, then compute the appearance/theme patch from
     // the current value so unrelated/deferred sections are preserved exactly.
-    void getSettings().then((current) => {
-      const patch = readForm(current);
-      void updateSettings(patch)
-        .then((saved) => {
-          writeForm(saved);
-          const derived = saved.preset;
-          status.textContent =
-            derived === "custom"
-              ? "Saved as custom appearance."
-              : `Saved (matches preset: ${derived}).`;
-        })
-        .catch(() => {
+    void getSettings()
+      .then((current) => {
+        let patch: Partial<Settings>;
+        try {
+          // readForm validates every color; an invalid value must fail the
+          // save gracefully (status message) rather than reject this promise
+          // and surface as an unhandled rejection.
+          patch = readForm(current);
+        } catch {
           status.textContent = "Save failed: invalid input.";
-        });
-    });
+          return;
+        }
+        void updateSettings(patch)
+          .then((saved) => {
+            writeForm(saved);
+            const derived = saved.preset;
+            status.textContent =
+              derived === "custom"
+                ? "Saved as custom appearance."
+                : `Saved (matches preset: ${derived}).`;
+          })
+          .catch(() => {
+            status.textContent = "Save failed: invalid input.";
+          });
+      })
+      .catch(() => {
+        status.textContent = "Save failed.";
+      });
   });
 
   reset.addEventListener("click", () => {
