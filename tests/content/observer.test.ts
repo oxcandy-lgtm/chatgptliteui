@@ -88,6 +88,7 @@ describe("Scoped mutation observer + route lifecycle (Fix 1/2)", () => {
     g.location = dom.window.location;
     g.MutationObserver = FakeMutationObserver;
     g.Node = dom.window.Node;
+    g.HTMLElement = dom.window.HTMLElement;
     const chromeStub = {
       storage: {
         local: {

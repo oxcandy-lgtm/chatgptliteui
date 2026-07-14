@@ -48,10 +48,10 @@ without a documented review:
 
 ## Background
 
-No background Service Worker is included in Phase 0. The content script, popup,
-and options page access `chrome.storage.local` directly. A Service Worker may
-be added later only if a concrete API requirement cannot be implemented safely
-without one, and only after review.
+No background Service Worker is included in Phase 0 through Phase 3. The content
+script, popup, and options page access `chrome.storage.local` directly. A
+Service Worker may be added later only if a concrete API requirement cannot be
+implemented safely without one, and only after review.
 
 ## Audit
 

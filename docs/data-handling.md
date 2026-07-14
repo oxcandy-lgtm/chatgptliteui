@@ -19,7 +19,7 @@ The `Settings` object (schema version 2) contains exclusively:
 - `enabled`, `preset` (`normal` | `minimal` | `work` | `ultra-lite` | `custom`);
 - `appearance` toggles, opt-in activation flags, and bounded integer sizes
   (conversation width 480–1600, font size 12–24);
-- `sidebar` mode;
+- `sidebar` mode (`visible` | `hover` | `button` | `hidden`);
 - `history` enabled flag, visible-pair count, mode;
 - `writingCopy` enabled flag, position, shortcut flag;
 - `codeBlocks` auto-collapse flag and threshold;

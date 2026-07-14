@@ -92,3 +92,13 @@
   background-color: var(--cgl-code-bg);
   color: var(--cgl-text);
 }
+
+/* ---- sidebar visibility (Phase 3): guarded, marker-only, non-destructive ----
+ * The only permitted mutation on the ChatGPT sidebar is the extension-owned
+ * marker `data-cgl-sidebar-target="true"`. Hiding is performed by adding the
+ * `cgl-sidebar-closed` root class; showing removes it so the official
+ * stylesheet controls layout again. No inline display, visibility snapshots,
+ * position/transform/z-index on the ChatGPT sidebar, and no animations. */
+:root.cgl-sidebar-closed [data-cgl-sidebar-target] {
+  display: none !important;
+}

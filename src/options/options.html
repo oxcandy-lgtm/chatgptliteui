@@ -36,6 +36,32 @@
       </section>
 
       <section>
+        <h2>Sidebar</h2>
+        <label class="cgl-row">
+          <span>Sidebar mode</span>
+          <select id="sidebarMode">
+            <option value="visible">Visible</option>
+            <option value="hover">Hover</option>
+            <option value="button">Button</option>
+            <option value="hidden">Hidden</option>
+          </select>
+        </label>
+        <p class="cgl-note">
+          <strong>Visible</strong>: official sidebar unchanged.
+          <strong>Hover</strong>: closed by default; an edge rail opens it on
+          pointer or focus. <strong>Button</strong>: closed by default; a
+          toggle button (and <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>L</kbd>)
+          opens it; <kbd>Esc</kbd> closes it. <strong>Hidden</strong>: closed
+          with no on-page control; <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>L</kbd>,
+          the popup, or options can restore it.
+        </p>
+        <p class="cgl-note">
+          Controls are non-destructive and do not remove or hide conversation
+          history. Detection failure leaves the official UI unchanged.
+        </p>
+      </section>
+
+      <section>
         <h2>Rendering</h2>
         <label class="cgl-row">
           <span>Disable animations and transitions</span>

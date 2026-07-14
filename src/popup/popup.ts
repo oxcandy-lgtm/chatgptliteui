@@ -1,4 +1,4 @@
-import type { PresetName, Settings } from "../shared/types.js";
+import type { PresetName, Settings, SidebarMode } from "../shared/types.js";
 import { getSettings, updateSettings } from "../settings/storage.js";
 import {
   applyAppearancePreset,
@@ -8,6 +8,7 @@ import {
 function bind(): void {
   const enabled = document.getElementById("enabled") as HTMLInputElement | null;
   const preset = document.getElementById("preset") as HTMLSelectElement | null;
+  const sidebar = document.getElementById("sidebar") as HTMLSelectElement | null;
   const status = document.getElementById("status") as HTMLParagraphElement | null;
   const openOptions = document.getElementById("open-options") as HTMLAnchorElement | null;
 
@@ -55,6 +56,25 @@ function bind(): void {
           })
           .catch(() => {
             if (status) status.textContent = "Failed to apply preset.";
+          });
+      });
+    }
+    if (sidebar) {
+      sidebar.value = settings.sidebar.mode;
+      // On change, read fresh settings and patch ONLY sidebar.mode so the
+      // enabled state, preset, appearance, theme, and all deferred settings
+      // are preserved exactly.
+      sidebar.addEventListener("change", () => {
+        const mode = sidebar.value as SidebarMode;
+        // Read fresh settings before patching so a concurrent change is not
+        // clobbered; mergeSettings preserves all unrelated sections.
+        void getSettings()
+          .then(() => updateSettings({ sidebar: { mode } }))
+          .then(() => {
+            if (status) status.textContent = `Sidebar: ${mode}.`;
+          })
+          .catch(() => {
+            if (status) status.textContent = "Save failed.";
           });
       });
     }
