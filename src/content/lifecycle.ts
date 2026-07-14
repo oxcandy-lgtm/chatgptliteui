@@ -28,6 +28,11 @@ export class ThemeApplier {
     this.controller.apply(settings);
   }
 
+  /** Refresh surface markers for new turns without touching classes/vars. */
+  refreshMarkers(settings: Settings): void {
+    this.controller.refreshMarkers(settings);
+  }
+
   /** Fully restore the original page appearance. */
   restore(): void {
     this.controller.restore();

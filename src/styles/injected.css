@@ -18,9 +18,10 @@
   scroll-behavior: auto !important;
 }
 
-/* ---- blur reduction: backdrop-filter only (NOT ordinary filters) ---- */
-:root.cgl-active.cgl-no-blur [data-cgl-conversation-root],
-:root.cgl-active.cgl-no-blur [data-cgl-composer] {
+/* ---- blur reduction: backdrop-filter only, page-wide (NOT ordinary filter) ---- */
+:root.cgl-active.cgl-no-blur *,
+:root.cgl-active.cgl-no-blur *::before,
+:root.cgl-active.cgl-no-blur *::after {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
 }
@@ -34,9 +35,10 @@
   text-shadow: none !important;
 }
 
-/* ---- conversation width: only the marked conversation surfaces ---- */
-:root.cgl-active.cgl-width [data-cgl-conversation-column],
-:root.cgl-active.cgl-width [data-cgl-conversation-root] {
+/* ---- conversation width: only the safely detected conversation column ----
+ * Never applied to [data-cgl-conversation-root] (which may be the entire
+ * [role="main"] application shell) nor to a low-confidence column. */
+:root.cgl-active.cgl-width [data-cgl-conversation-column] {
   max-width: min(100%, var(--cgl-conversation-width));
   margin-inline: auto;
 }

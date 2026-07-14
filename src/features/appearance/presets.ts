@@ -1,4 +1,5 @@
 import type { PresetName, Settings } from "../../shared/types.js";
+import type { DetectionResult } from "../../adapters/detection-result.js";
 import { cloneDefaults } from "../../settings/defaults.js";
 
 /**
@@ -120,4 +121,33 @@ export function detectAppearancePreset(settings: Settings): PresetName {
     }
   }
   return "custom";
+}
+
+/**
+ * Whether the given settings produce any active appearance effect.
+ * When false, the appearance runtime must be a complete no-op (Normal / disabled).
+ */
+export function hasAppearanceEffects(settings: Settings): boolean {
+  const a = settings.appearance;
+  return (
+    a.disableAnimations ||
+    a.disableBlur ||
+    a.disableShadows ||
+    a.compactSpacing ||
+    a.useConversationWidth ||
+    a.useFontSize ||
+    a.useTheme
+  );
+}
+
+/**
+ * Whether a detection result may be used for cosmetic marking. Cosmetic marking
+ * may only act on `high` or `medium` confidence results with a concrete
+ * element. `low`/`unknown` results are refused so the official UI is never
+ * touched on ambiguous detection.
+ */
+export function isSafeCosmeticDetection(result: DetectionResult): boolean {
+  if (!result.found) return false;
+  if (result.confidence !== "high" && result.confidence !== "medium") return false;
+  return result.element != null || result.elements.length > 0;
 }

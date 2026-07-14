@@ -19,9 +19,12 @@ interface V1Appearance {
   disableAnimations?: unknown;
   disableBlur?: unknown;
   disableShadows?: unknown;
-  conversationWidth?: unknown;
-  fontSize?: unknown;
   compactSpacing?: unknown;
+  useConversationWidth?: unknown;
+  conversationWidth?: unknown;
+  useFontSize?: unknown;
+  fontSize?: unknown;
+  useTheme?: unknown;
 }
 
 interface V1Settings {
@@ -119,6 +122,17 @@ function migrateV1(v1: V1Settings): Settings {
     if (isBoolean(a.disableBlur)) next.appearance.disableBlur = a.disableBlur;
     if (isBoolean(a.disableShadows)) next.appearance.disableShadows = a.disableShadows;
     if (isBoolean(a.compactSpacing)) next.appearance.compactSpacing = a.compactSpacing;
+    // Carry explicit v1 activation flags; derive from values when absent so a
+    // custom v1 width/font/theme is preserved as active rather than reset.
+    if (isBoolean(a.useConversationWidth)) next.appearance.useConversationWidth = a.useConversationWidth;
+    else if (isIntIn(a.conversationWidth, 480, 1600) && a.conversationWidth !== 768) {
+      next.appearance.useConversationWidth = true;
+    }
+    if (isBoolean(a.useFontSize)) next.appearance.useFontSize = a.useFontSize;
+    else if (isIntIn(a.fontSize, 12, 24) && a.fontSize !== 16) {
+      next.appearance.useFontSize = true;
+    }
+    if (isBoolean(a.useTheme)) next.appearance.useTheme = a.useTheme;
     if (isIntIn(a.conversationWidth, 480, 1600)) {
       next.appearance.conversationWidth = a.conversationWidth;
     }
@@ -157,18 +171,27 @@ function migrateV1(v1: V1Settings): Settings {
   }
 
   // Decide preset + activation flags based on the v1 source.
+  // A manually edited v1 that does not exactly match a known preset must
+  // preserve the user's already-migrated values (custom), never silently
+  // reset them to a locked profile.
   if (v1.preset === "normal" && PRESETS_V1.has(v1.preset) && v1IsUntouchedDefault(a)) {
     next.preset = "normal";
     // All activation flags already false (defaults) -> no visual overrides.
   } else if (v1.preset === "minimal" || v1.preset === "work" || v1.preset === "ultra-lite") {
-    next.preset = v1.preset;
-    const patch =
+    const profile =
       v1.preset === "minimal"
         ? V1_MINIMAL_PATCH
         : v1.preset === "work"
           ? V1_WORK_PATCH
           : V1_ULTRA_PATCH;
-    Object.assign(next.appearance, patch);
+    if (appearanceMatchesV1Preset(a, v1.preset)) {
+      next.preset = v1.preset;
+      Object.assign(next.appearance, profile);
+    } else {
+      // Manually edited v1 with a known preset name but non-matching profile:
+      // preserve migrated values and mark custom.
+      next.preset = "custom";
+    }
   } else {
     // Manually edited v1 (or unknown preset) that does not exactly match a
     // known profile -> preserve values and mark as custom.
@@ -176,6 +199,35 @@ function migrateV1(v1: V1Settings): Settings {
   }
 
   return next;
+}
+
+/**
+ * Whether the v1 appearance object exactly matches a known preset's v1 profile
+ * (treating missing fields as their neutral defaults). Used to decide between
+ * locking to a preset profile vs. preserving a manual edit as `custom`.
+ */
+function appearanceMatchesV1Preset(
+  a: V1Appearance | undefined,
+  preset: "minimal" | "work" | "ultra-lite",
+): boolean {
+  const profile =
+    preset === "minimal"
+      ? V1_MINIMAL_PATCH
+      : preset === "work"
+        ? V1_WORK_PATCH
+        : V1_ULTRA_PATCH;
+  const width = a?.conversationWidth ?? 768;
+  const fontSize = a?.fontSize ?? 16;
+  const expectedWidth = preset === "work" ? 880 : preset === "ultra-lite" ? 720 : 768;
+  const expectedFont = preset === "ultra-lite" ? 15 : 16;
+  return (
+    (a?.disableAnimations ?? false) === profile.disableAnimations &&
+    (a?.disableBlur ?? false) === profile.disableBlur &&
+    (a?.disableShadows ?? false) === profile.disableShadows &&
+    (a?.compactSpacing ?? false) === profile.compactSpacing &&
+    (profile.useConversationWidth ? width === expectedWidth : width === 768) &&
+    (profile.useFontSize ? fontSize === expectedFont : fontSize === 16)
+  );
 }
 
 /** A migration maps an older schema payload to the current Settings shape. */

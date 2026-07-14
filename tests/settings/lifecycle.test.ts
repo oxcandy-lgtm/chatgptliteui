@@ -59,7 +59,7 @@ describe("ThemeApplier", () => {
     expect(root.style.getPropertyValue("--cgl-page-bg")).toBe("");
   });
 
-  it("Normal preset adds only the active guard and no override classes", () => {
+  it("Normal preset adds no root class and no override classes or variables", () => {
     const applier = new ThemeApplier(dom.window.document.documentElement);
     applier.apply({
       enabled: true,
@@ -72,8 +72,8 @@ describe("ThemeApplier", () => {
       theme: { pageBackground: "#101010", conversationBackground: "#111111", userBackground: "#222222", assistantBackground: "transparent", inputBackground: "#333333", codeBackground: "#444444", writingBlockBackground: "#555555", textColor: "#eeeeee" },
     } as never);
     const root = dom.window.document.documentElement;
-    expect(root.classList.contains("cgl-active")).toBe(true);
-    // No visual override flags should be set for Normal.
+    // Normal is a complete no-op.
+    expect(root.classList.contains("cgl-active")).toBe(false);
     expect(root.classList.contains("cgl-no-anim")).toBe(false);
     expect(root.classList.contains("cgl-no-blur")).toBe(false);
     expect(root.classList.contains("cgl-no-shadow")).toBe(false);

@@ -5,6 +5,10 @@ import {
   clearAllMarkers,
   mark,
 } from "./markers.js";
+import {
+  hasAppearanceEffects,
+  isSafeCosmeticDetection,
+} from "./presets.js";
 import type { ChatGptAdapter } from "../../adapters/chatgpt-adapter.js";
 
 /**
@@ -15,8 +19,8 @@ import type { ChatGptAdapter } from "../../adapters/chatgpt-adapter.js";
  *    setting `--cgl-*` custom properties on document.documentElement;
  *  - mark detected ChatGPT surfaces with extension-owned `data-cgl-*` markers
  *    so CSS can style them without broad/ambiguous selectors;
- *  - restore the official UI completely when disabled, on Normal preset,
- *    on route teardown, or on lifecycle teardown.
+ *  - restore the official UI completely when disabled, on Normal preset, on
+ *    route teardown, or on lifecycle teardown.
  *
  * This is strictly non-destructive: it never hides, removes, or rewrites page
  * elements. It only adds extension-owned attributes/classes and CSS variables
@@ -64,27 +68,36 @@ export class AppearanceController {
     this.marked = [];
 
     const conv = this.adapter.detectConversationContainer();
-    if (conv.found && conv.element) {
+    if (isSafeCosmeticDetection(conv) && conv.element) {
       mark(conv.element, "data-cgl-conversation-root");
       this.marked.push(conv.element);
-      // Narrow column when available (semantic, cardinality-checked).
-      const column = this.adapter.detectConversationColumn();
-      if (column.found && column.element && column.element !== conv.element) {
-        mark(column.element, "data-cgl-conversation-column");
-        this.marked.push(column.element);
-      }
+    }
+
+    // Width applies ONLY to a safely detected conversation column, never to
+    // the conversation root (which may be the whole [role="main"] shell) and
+    // never to a low/unknown-confidence result.
+    const column = this.adapter.detectConversationColumn();
+    if (
+      isSafeCosmeticDetection(column) &&
+      column.element &&
+      column.element !== conv.element
+    ) {
+      mark(column.element, "data-cgl-conversation-column");
+      this.marked.push(column.element);
     }
 
     const composer = this.adapter.detectComposer();
-    if (composer.found && composer.element) {
+    if (isSafeCosmeticDetection(composer) && composer.element) {
       mark(composer.element, "data-cgl-composer");
       this.marked.push(composer.element);
     }
 
     const users = this.adapter.detectUserTurns();
     for (const u of users.elements) {
-      mark(u, "data-cgl-user-turn");
-      this.marked.push(u);
+      if (isSafeCosmeticDetection({ ...users, element: u } as never)) {
+        mark(u, "data-cgl-user-turn");
+        this.marked.push(u);
+      }
     }
     const assistants = this.adapter.detectAssistantTurns();
     for (const a of assistants.elements) {
@@ -94,13 +107,28 @@ export class AppearanceController {
   }
 
   /**
+   * Clear stale markers, rerun safe Adapter detection, and re-mark current
+   * surfaces. Leaves active root classes and CSS variables intact, and does
+   * nothing when appearance has no active effect.
+   */
+  refreshMarkers(settings: Settings): void {
+    if (!settings.enabled || !hasAppearanceEffects(settings)) return;
+    this.adapter.refresh();
+    // Clear only markers (not classes/vars) before re-marking.
+    clearAllMarkers(document);
+    this.marked = [];
+    this.markSurfaces();
+  }
+
+  /**
    * Apply appearance settings.
-   * When disabled or on the `normal` preset with no overrides, applies no
-   * appearance (only the clean `cgl-active` guard is toggled off by restore).
+   * A complete no-op (no root class, no markers, no variables) when the
+   * extension is disabled or when no appearance effect is active (e.g. Normal).
    */
   apply(settings: Settings): void {
     this.restore();
     if (!settings.enabled) return;
+    if (!hasAppearanceEffects(settings)) return;
 
     this.root.classList.add("cgl-active");
     const a = settings.appearance;

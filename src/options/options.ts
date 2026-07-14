@@ -18,12 +18,24 @@ const COLOR_FIELDS = [
 
 type ColorField = (typeof COLOR_FIELDS)[number];
 
+/** Safe opaque fallback used when transparency is toggled off with no draft. */
+const FALLBACK_OPAQUE = "#1c2636";
+
+/** Latest loaded settings, used to preserve reserved/deferred fields on save. */
+let currentSettings: Settings | null = null;
+
 function el<T extends HTMLElement>(id: string): T {
   const node = document.getElementById(id);
   if (!node) throw new Error(`missing element #${id}`);
   return node as T;
 }
 
+/**
+ * Read the form into a Partial<Settings> patch. The reserved writing-block
+ * background is preserved from the latest loaded settings so editing unrelated
+ * appearance fields never mutates it. Unknown/deferred fields are likewise
+ * carried through from `currentSettings`.
+ */
 function readForm(): Partial<Settings> {
   const enabled = el<HTMLInputElement>("enabled").checked;
   const preset = el<HTMLSelectElement>("preset").value as PresetName;
@@ -40,17 +52,41 @@ function readForm(): Partial<Settings> {
     useTheme: el<HTMLInputElement>("useTheme").checked,
   };
 
+  // Assistant background: checkbox is the persisted-state authority. Never
+  // assign "transparent" to the color input's value.
+  const assistantTransparent = el<HTMLInputElement>("assistantTransparent").checked;
+  const assistantColor = el<HTMLInputElement>("assistantBackground").value;
+  const assistantBackground = assistantTransparent ? "transparent" : assistantColor;
+
   const theme = {} as Settings["theme"];
   for (const f of COLOR_FIELDS) {
     theme[f] = el<HTMLInputElement>(f).value;
   }
-  // Preserve the reserved field from storage; not edited in the UI.
-  theme.writingBlockBackground = "#161b25";
+  theme.assistantBackground = assistantBackground;
+  // Preserve the reserved writing-block background from loaded settings.
+  theme.writingBlockBackground =
+    currentSettings?.theme.writingBlockBackground ?? "#161b25";
 
-  return { enabled, preset, appearance, theme };
+  // Preserve deferred feature fields from loaded settings.
+  const sidebar = currentSettings?.sidebar;
+  const history = currentSettings?.history;
+  const writingCopy = currentSettings?.writingCopy;
+  const codeBlocks = currentSettings?.codeBlocks;
+
+  return {
+    enabled,
+    preset,
+    appearance,
+    theme,
+    ...(sidebar ? { sidebar } : {}),
+    ...(history ? { history } : {}),
+    ...(writingCopy ? { writingCopy } : {}),
+    ...(codeBlocks ? { codeBlocks } : {}),
+  };
 }
 
 function writeForm(settings: Settings): void {
+  currentSettings = settings;
   el<HTMLInputElement>("enabled").checked = settings.enabled;
   el<HTMLSelectElement>("preset").value = settings.preset;
   const a = settings.appearance;
@@ -66,7 +102,24 @@ function writeForm(settings: Settings): void {
   for (const f of COLOR_FIELDS) {
     el<HTMLInputElement>(f).value = settings.theme[f as ColorField];
   }
+  // Assistant: derive transparent checkbox from the stored value; keep the
+  // color input on a safe opaque value, never "transparent".
+  const assistant = settings.theme.assistantBackground;
+  const assistantTransparent = assistant.toLowerCase() === "transparent";
+  el<HTMLInputElement>("assistantTransparent").checked = assistantTransparent;
+  el<HTMLInputElement>("assistantBackground").value = assistantTransparent
+    ? currentAssistantDraft(settings.theme.assistantBackground)
+    : assistant;
   syncDisabledState();
+}
+
+/** Last known safe opaque draft for the assistant background color. */
+let lastOpaqueDraft = FALLBACK_OPAQUE;
+
+function currentAssistantDraft(assistantBackground: string): string {
+  return assistantBackground.toLowerCase() === "transparent"
+    ? lastOpaqueDraft
+    : assistantBackground;
 }
 
 /** Disable numeric inputs whose enable toggle is off. */
@@ -79,10 +132,17 @@ function syncDisabledState(): void {
   for (const f of COLOR_FIELDS) {
     el<HTMLInputElement>(f).disabled = themeOff;
   }
-  // Assistant-transparent helper reflects current value.
-  const assistant = el<HTMLInputElement>("assistantBackground");
-  el<HTMLInputElement>("assistantTransparent").checked =
-    assistant.value.toLowerCase() === "transparent";
+  const assistantColor = el<HTMLInputElement>("assistantBackground");
+  const assistantTransparent = el<HTMLInputElement>("assistantTransparent").checked;
+  if (assistantTransparent) {
+    // Remember the last opaque draft before disabling.
+    if (assistantColor.value.toLowerCase() !== "transparent") {
+      lastOpaqueDraft = assistantColor.value;
+    }
+    assistantColor.disabled = true;
+  } else {
+    assistantColor.disabled = themeOff;
+  }
 }
 
 function bind(): void {
@@ -104,27 +164,35 @@ function bind(): void {
     if (value === "custom") return; // not user-selectable
     void getSettings().then((current) => {
       const next = applyAppearancePreset(current, value as Exclude<PresetName, "custom">);
-      void updateSettings(next).then(() => {
-        writeForm(next);
-        status.textContent = `Applied preset: ${value}.`;
-      }).catch(() => {
-        status.textContent = "Failed to apply preset.";
-      });
+      void updateSettings(next)
+        .then(() => {
+          writeForm(next);
+          status.textContent = `Applied preset: ${value}.`;
+        })
+        .catch(() => {
+          status.textContent = "Failed to apply preset.";
+        });
     });
   });
 
-  // Assistant "transparent" toggle.
+  // Assistant "transparent" toggle: checkbox is authority; keep color input
+  // opaque (never "transparent"). Disabling transparency restores the draft.
   el<HTMLInputElement>("assistantTransparent").addEventListener("change", () => {
-    const cb = el<HTMLInputElement>("assistantTransparent");
-    el<HTMLInputElement>("assistantBackground").value = cb.checked
-      ? "transparent"
-      : "#1c2636";
+    const transparent = el<HTMLInputElement>("assistantTransparent").checked;
+    const assistant = el<HTMLInputElement>("assistantBackground");
+    if (transparent) {
+      if (assistant.value.toLowerCase() !== "transparent") {
+        lastOpaqueDraft = assistant.value;
+      }
+      assistant.value = lastOpaqueDraft;
+    } else {
+      assistant.value = lastOpaqueDraft;
+    }
+    syncDisabledState();
   });
 
   save.addEventListener("click", () => {
     const patch = readForm();
-    // Manual save derives the correct preset: if the resulting appearance
-    // exactly matches a predefined profile, restore that name, else custom.
     void getSettings().then((current) => {
       const merged = { ...current, ...patch } as Settings;
       const derived = detectAppearancePreset(merged);
@@ -132,9 +200,10 @@ function bind(): void {
       void updateSettings(finalPatch)
         .then((saved) => {
           writeForm(saved);
-          status.textContent = derived === "custom"
-            ? "Saved as custom appearance."
-            : `Saved (matches preset: ${derived}).`;
+          status.textContent =
+            derived === "custom"
+              ? "Saved as custom appearance."
+              : `Saved (matches preset: ${derived}).`;
         })
         .catch(() => {
           status.textContent = "Save failed: invalid input.";
@@ -144,7 +213,6 @@ function bind(): void {
 
   reset.addEventListener("click", () => {
     void resetSettings().then((defaults) => {
-      // Reset returns enabled:true, preset:normal, appearance_effect:none.
       writeForm(defaults);
       status.textContent = "Reset to official ChatGPT UI.";
     });
@@ -153,10 +221,14 @@ function bind(): void {
   normalBtn.addEventListener("click", () => {
     void getSettings().then((current) => {
       const next = applyAppearancePreset(current, "normal");
-      void updateSettings(next).then(() => {
-        writeForm(next);
-        status.textContent = "Restored official ChatGPT UI.";
-      });
+      void updateSettings(next)
+        .then(() => {
+          writeForm(next);
+          status.textContent = "Restored official ChatGPT UI.";
+        })
+        .catch(() => {
+          status.textContent = "Failed to restore official UI.";
+        });
     });
   });
 }

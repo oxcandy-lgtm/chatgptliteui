@@ -59,11 +59,11 @@ describe("AppearanceController runtime", () => {
     expect(dom.window.document.querySelector("[data-cgl-conversation-root]")).toBeNull();
   });
 
-  it("Normal preset applies no appearance overrides (no-op)", () => {
+  it("Normal preset adds no root class, no markers, no variables", () => {
     const c = controller();
     c.apply(baseSettings()); // normal defaults
     const root = dom.window.document.documentElement;
-    expect(root.classList.contains("cgl-active")).toBe(true);
+    expect(root.classList.contains("cgl-active")).toBe(false);
     expect(root.classList.contains("cgl-no-anim")).toBe(false);
     expect(root.classList.contains("cgl-no-blur")).toBe(false);
     expect(root.classList.contains("cgl-no-shadow")).toBe(false);
@@ -71,6 +71,10 @@ describe("AppearanceController runtime", () => {
     expect(root.classList.contains("cgl-width")).toBe(false);
     expect(root.classList.contains("cgl-font")).toBe(false);
     expect(root.classList.contains("cgl-theme")).toBe(false);
+    // No markers under Normal (no-op).
+    expect(dom.window.document.querySelector("[data-cgl-conversation-root]")).toBeNull();
+    expect(dom.window.document.querySelector("[data-cgl-composer]")).toBeNull();
+    expect(dom.window.document.querySelectorAll("[data-cgl-user-turn]").length).toBe(0);
   });
 
   it("Minimal applies only animation/blur/shadow classes", () => {
@@ -149,9 +153,9 @@ describe("AppearanceController runtime", () => {
     expect(root.style.getPropertyValue("filter")).toBe("");
   });
 
-  it("marks detected surfaces with extension-owned markers", () => {
+  it("marks detected surfaces with extension-owned markers when an effect is active", () => {
     const c = controller();
-    c.apply(baseSettings());
+    c.apply(baseSettings({ disableAnimations: true }));
     const doc = dom.window.document;
     expect(doc.querySelector("[data-cgl-conversation-root]")).not.toBeNull();
     expect(doc.querySelector("[data-cgl-composer]")).not.toBeNull();
