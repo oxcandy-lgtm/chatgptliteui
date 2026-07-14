@@ -19,6 +19,14 @@ function det(partial: Partial<DetectionResult>): DetectionResult {
   } as DetectionResult;
 }
 
+function settings(): Settings {
+  const s = cloneDefaults();
+  s.enabled = true;
+  s.appearance.useConversationWidth = true;
+  s.appearance.conversationWidth = 800;
+  return s;
+}
+
 /** Minimal adapter stub whose detection can be scripted per test. */
 class StubAdapter {
   container: DetectionResult;
@@ -71,14 +79,6 @@ describe("Conversation width targeting (Blocker 3)", () => {
     delete g.document;
   });
 
-  function settings(): Settings {
-    const s = cloneDefaults();
-    s.enabled = true;
-    s.appearance.useConversationWidth = true;
-    s.appearance.conversationWidth = 800;
-    return s;
-  }
-
   it("never marks [role=main] itself with a width marker", () => {
     const main = dom.window.document.querySelector('[role="main"]')!;
     const adapter = new StubAdapter({
@@ -130,5 +130,104 @@ describe("Conversation width targeting (Blocker 3)", () => {
     c.apply(settings());
     const column = dom.window.document.querySelector(".column")!;
     expect(column.hasAttribute("data-cgl-conversation-column")).toBe(false);
+  });
+});
+
+// Fix 3: every detected surface must pass isSafeCosmeticDetection before a
+// marker is added. User and Assistant turns use the same uniform gate.
+describe("Confidence-gated surface marking (Fix 3)", () => {
+  let dom: JSDOM;
+  beforeEach(() => {
+    dom = installDom();
+  });
+  afterEach(() => {
+    const g = globalThis as unknown as Record<string, unknown>;
+    delete g.window;
+    delete g.document;
+  });
+
+  class TurnStubAdapter extends StubAdapter {
+    constructor(opts: {
+      container: DetectionResult;
+      column: DetectionResult;
+      user: DetectionResult;
+      assistant: DetectionResult;
+    }) {
+      super(opts);
+      this.userConf = opts.user;
+      this.assistantConf = opts.assistant;
+    }
+    userConf: DetectionResult;
+    assistantConf: DetectionResult;
+    override detectUserTurns(): DetectionResult {
+      return this.userConf;
+    }
+    override detectAssistantTurns(): DetectionResult {
+      return this.assistantConf;
+    }
+  }
+
+  function mkRoot(): HTMLElement {
+    return dom.window.document.documentElement;
+  }
+
+  it("low-confidence User result creates no marker", () => {
+    const main = dom.window.document.querySelector('[role="main"]')!;
+    const adapter = new TurnStubAdapter({
+      container: det({ found: true, confidence: "high", element: main as HTMLElement }),
+      column: det({ found: true, confidence: "high", element: main as HTMLElement }),
+      user: det({ found: true, confidence: "low", elements: [main as HTMLElement] }),
+      assistant: det({ found: true, confidence: "high", elements: [] }),
+    }) as unknown as ChatGptAdapter;
+    const c = new AppearanceController(mkRoot(), adapter);
+    c.apply(settings());
+    expect(main.hasAttribute("data-cgl-user-turn")).toBe(false);
+  });
+
+  it("low-confidence Assistant result creates no marker", () => {
+    const main = dom.window.document.querySelector('[role="main"]')!;
+    const adapter = new TurnStubAdapter({
+      container: det({ found: true, confidence: "high", element: main as HTMLElement }),
+      column: det({ found: true, confidence: "high", element: main as HTMLElement }),
+      user: det({ found: true, confidence: "high", elements: [] }),
+      assistant: det({ found: true, confidence: "low", elements: [main as HTMLElement] }),
+    }) as unknown as ChatGptAdapter;
+    const c = new AppearanceController(mkRoot(), adapter);
+    c.apply(settings());
+    expect(main.hasAttribute("data-cgl-assistant-turn")).toBe(false);
+  });
+
+  it("medium/high User and Assistant results are marked", () => {
+    const main = dom.window.document.querySelector('[role="main"]')!;
+    for (const [uc, ac] of [
+      ["medium", "medium"],
+      ["high", "high"],
+    ] as const) {
+      const adapter = new TurnStubAdapter({
+        container: det({ found: true, confidence: "high", element: main as HTMLElement }),
+        column: det({ found: true, confidence: "high", element: main as HTMLElement }),
+        user: det({ found: true, confidence: uc, elements: [main as HTMLElement] }),
+        assistant: det({ found: true, confidence: ac, elements: [main as HTMLElement] }),
+      }) as unknown as ChatGptAdapter;
+      const c = new AppearanceController(mkRoot(), adapter);
+      c.apply(settings());
+      expect(main.hasAttribute("data-cgl-user-turn")).toBe(true);
+      expect(main.hasAttribute("data-cgl-assistant-turn")).toBe(true);
+      c.restore();
+    }
+  });
+
+  it("unknown/ambiguous results leave the DOM unchanged", () => {
+    const main = dom.window.document.querySelector('[role="main"]')!;
+    const adapter = new TurnStubAdapter({
+      container: det({ found: true, confidence: "high", element: main as HTMLElement }),
+      column: det({ found: true, confidence: "high", element: main as HTMLElement }),
+      user: det({ found: false, confidence: "unknown", elements: [] }),
+      assistant: det({ found: false, confidence: "unknown", elements: [] }),
+    }) as unknown as ChatGptAdapter;
+    const c = new AppearanceController(mkRoot(), adapter);
+    c.apply(settings());
+    expect(main.hasAttribute("data-cgl-user-turn")).toBe(false);
+    expect(main.hasAttribute("data-cgl-assistant-turn")).toBe(false);
   });
 });

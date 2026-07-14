@@ -273,4 +273,146 @@ describe("v1 -> v2 migration", () => {
       expect(result).toBeNull();
     });
   });
+
+  // Fix 1: the real schema-v1 payload did NOT contain useConversationWidth /
+  // useFontSize / useTheme. These tests prove migration using the actual
+  // flag-less v1 shape, deriving activation from values (and theme presence).
+  describe("Fix 1: flag-less v1 shape (actual schema)", () => {
+    it("flag-less v1 custom theme sets useTheme true", () => {
+      const v1 = {
+        preset: "custom",
+        appearance: {
+          disableAnimations: false,
+          disableBlur: false,
+          disableShadows: false,
+          compactSpacing: false,
+          conversationWidth: 768,
+          fontSize: 16,
+        },
+        theme: {
+          pageBackground: "#101010",
+          conversationBackground: "#111111",
+          userBackground: "#222222",
+          assistantBackground: "#333333",
+          inputBackground: "#444444",
+          codeBackground: "#555555",
+          writingBlockBackground: "#666666",
+          textColor: "#eeeeee",
+        },
+      };
+      const s = migrateEnvelope(v1Envelope(v1)) as Settings;
+      expect(s.preset).toBe("custom");
+      expect(s.appearance.useTheme).toBe(true);
+    });
+
+    it("flag-less v1 custom width becomes active", () => {
+      const v1 = {
+        preset: "custom",
+        appearance: {
+          disableAnimations: false,
+          disableBlur: false,
+          disableShadows: false,
+          compactSpacing: false,
+          conversationWidth: 1024, // non-default
+          fontSize: 16,
+        },
+      };
+      const s = migrateEnvelope(v1Envelope(v1)) as Settings;
+      expect(s.preset).toBe("custom");
+      expect(s.appearance.useConversationWidth).toBe(true);
+      expect(s.appearance.conversationWidth).toBe(1024);
+    });
+
+    it("flag-less v1 custom font becomes active", () => {
+      const v1 = {
+        preset: "custom",
+        appearance: {
+          disableAnimations: false,
+          disableBlur: false,
+          disableShadows: false,
+          compactSpacing: false,
+          conversationWidth: 768,
+          fontSize: 20, // non-default
+        },
+      };
+      const s = migrateEnvelope(v1Envelope(v1)) as Settings;
+      expect(s.preset).toBe("custom");
+      expect(s.appearance.useFontSize).toBe(true);
+      expect(s.appearance.fontSize).toBe(20);
+    });
+
+    it("flag-less v1 custom theme colors are preserved", () => {
+      const v1 = {
+        preset: "custom",
+        appearance: {
+          disableAnimations: false,
+          disableBlur: false,
+          disableShadows: false,
+          compactSpacing: false,
+          conversationWidth: 768,
+          fontSize: 16,
+        },
+        theme: {
+          pageBackground: "#101010",
+          conversationBackground: "#111111",
+          userBackground: "#222222",
+          assistantBackground: "#333333",
+          inputBackground: "#444444",
+          codeBackground: "#555555",
+          writingBlockBackground: "#666666",
+          textColor: "#eeeeee",
+        },
+      };
+      const s = migrateEnvelope(v1Envelope(v1)) as Settings;
+      expect(s.theme.pageBackground).toBe("#101010");
+      expect(s.theme.assistantBackground).toBe("#333333");
+      expect(s.theme.textColor).toBe("#eeeeee");
+      expect(s.theme.writingBlockBackground).toBe("#666666");
+    });
+
+    it("flag-less v1 custom preserves anim/blur/shadow/compact flags", () => {
+      const v1 = {
+        preset: "custom",
+        appearance: {
+          disableAnimations: true,
+          disableBlur: true,
+          disableShadows: true,
+          compactSpacing: true,
+          conversationWidth: 768,
+          fontSize: 16,
+        },
+      };
+      const s = migrateEnvelope(v1Envelope(v1)) as Settings;
+      expect(s.preset).toBe("custom");
+      expect(s.appearance.disableAnimations).toBe(true);
+      expect(s.appearance.disableBlur).toBe(true);
+      expect(s.appearance.disableShadows).toBe(true);
+      expect(s.appearance.compactSpacing).toBe(true);
+    });
+
+    it("invalid flag-less v1 color fails closed", () => {
+      const v1 = {
+        preset: "custom",
+        appearance: {
+          disableAnimations: false,
+          disableBlur: false,
+          disableShadows: false,
+          compactSpacing: false,
+          conversationWidth: 768,
+          fontSize: 16,
+        },
+        theme: {
+          pageBackground: "var(--evil)",
+          conversationBackground: "#111111",
+          userBackground: "#222222",
+          assistantBackground: "#333333",
+          inputBackground: "#444444",
+          codeBackground: "#555555",
+          writingBlockBackground: "#666666",
+          textColor: "#eeeeee",
+        },
+      };
+      expect(migrateEnvelope(v1Envelope(v1))).toBeNull();
+    });
+  });
 });

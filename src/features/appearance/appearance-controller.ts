@@ -93,16 +93,18 @@ export class AppearanceController {
     }
 
     const users = this.adapter.detectUserTurns();
-    for (const u of users.elements) {
-      if (isSafeCosmeticDetection({ ...users, element: u } as never)) {
+    if (isSafeCosmeticDetection(users)) {
+      for (const u of users.elements) {
         mark(u, "data-cgl-user-turn");
         this.marked.push(u);
       }
     }
     const assistants = this.adapter.detectAssistantTurns();
-    for (const a of assistants.elements) {
-      mark(a, "data-cgl-assistant-turn");
-      this.marked.push(a);
+    if (isSafeCosmeticDetection(assistants)) {
+      for (const a of assistants.elements) {
+        mark(a, "data-cgl-assistant-turn");
+        this.marked.push(a);
+      }
     }
   }
 

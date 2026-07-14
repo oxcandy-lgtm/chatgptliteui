@@ -194,8 +194,15 @@ function migrateV1(v1: V1Settings): Settings {
     }
   } else {
     // Manually edited v1 (or unknown preset) that does not exactly match a
-    // known profile -> preserve values and mark as custom.
+    // known profile -> preserve values and mark as custom. Schema v1 did not
+    // carry explicit activation flags, so derive them from the stored values.
     next.preset = "custom";
+    // The Phase 0 runtime applied its stored theme values whenever enabled, so
+    // a present theme object means the theme was active. Derive useTheme from
+    // theme presence only when no explicit flag was supplied.
+    if (!isBoolean(a?.useTheme) && isObject(v1.theme)) {
+      next.appearance.useTheme = true;
+    }
   }
 
   return next;

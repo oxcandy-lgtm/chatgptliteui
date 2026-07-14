@@ -4,6 +4,7 @@ import { ThemeApplier } from "./lifecycle.js";
 import { RouteListener } from "./route-listener.js";
 import { createAdapter } from "../adapters/chatgpt-adapter.js";
 import { debounce } from "../shared/debounce.js";
+import { hasAppearanceEffects } from "../features/appearance/presets.js";
 import { logger } from "../shared/logger.js";
 
 /**
@@ -32,26 +33,36 @@ const routeListener = new RouteListener();
 let observer: MutationObserver | null = null;
 let observedTarget: Node | null = null;
 
-const debouncedApply = debounce((s: Settings) => applier.apply(s), 120);
+/**
+ * Single coalesced marker-refresh operation. The MutationObserver callback
+ * schedules this (never a full storage read + rescan per mutation batch), so a
+ * burst of synchronous DOM mutations produces exactly one refresh after the
+ * debounce window.
+ */
+const scheduleMarkerRefresh = debounce((): void => {
+  void getSettings().then((settings) => {
+    applier.refreshMarkers(settings);
+  });
+}, 120);
+
+/** Apply settings and connect/disconnect the observer per the active profile. */
+function syncRuntime(settings: Settings): void {
+  applier.apply(settings);
+  if (settings.enabled && hasAppearanceEffects(settings)) {
+    connectObserver();
+  } else {
+    disconnectObserver();
+  }
+}
 
 /** Apply current settings; used on bootstrap, storage change, and route change. */
 function applyCurrent(): void {
-  void getSettings().then((s) => applier.apply(s));
+  void getSettings().then(syncRuntime);
 }
 
-/** Re-mark surfaces for new turns without clobbering root classes/variables. */
-function refreshCurrentMarkers(): void {
-  void getSettings().then((s) => applier.refreshMarkers(s));
-}
-
-/**
- * Attach a scoped, debounced observer to the narrowest available stable root.
- * Prefers the detected conversation container; falls back to document.body only
- * until a narrower root is discovered, and reconnects once found.
- */
+/** Attach a scoped observer to the narrowest available stable root. */
 function connectObserver(): void {
-  const target: Node =
-    adapter.detectConversationContainer().element ?? document.body;
+  const target: Node = adapter.detectConversationContainer().element ?? document.body;
   if (observedTarget === target && observer) return; // already observing
   if (observer) observer.disconnect();
   observer = new MutationObserver((mutations) => {
@@ -75,50 +86,54 @@ function connectObserver(): void {
     if (narrower && narrower !== observedTarget) {
       connectObserver();
     }
-    // Refresh markers for new turns (debounced above via refreshCurrentMarkers).
-    refreshCurrentMarkers();
+    // Coalesce marker refresh into one debounced operation.
+    scheduleMarkerRefresh();
   });
   observedTarget = target;
   observer.observe(target, { childList: true, subtree: true });
 }
 
-/** Tear down observers and extension-owned UI without destroying page DOM. */
-function teardown(): void {
+/** Disconnect the active observer (Normal / disabled). Idempotent. */
+function disconnectObserver(): void {
   if (observer) {
     observer.disconnect();
     observer = null;
   }
   observedTarget = null;
+}
+
+/** Tear down observers and extension-owned UI without destroying page DOM. */
+function teardown(): void {
+  // Cancel any pending debounced refresh so it cannot re-mark the DOM after
+  // teardown.
+  scheduleMarkerRefresh.cancel();
+  disconnectObserver();
   applier.restore();
 }
 
-/** Re-apply after a route change: restore markers, refresh, re-apply, reconnect. */
+/** Re-apply after a route change: restore markers, refresh, re-sync. */
 function reapplyAfterRouteChange(): void {
   applier.restore();
   adapter.refresh();
   applyCurrent();
-  connectObserver();
 }
 
 async function bootstrap(): Promise<void> {
-  applier.apply(await getSettings());
+  const settings = await getSettings();
+  syncRuntime(settings);
 
   routeListener.onChange(() => {
     reapplyAfterRouteChange();
   });
   routeListener.start();
 
-  connectObserver();
-
   if (typeof chrome !== "undefined" && chrome.storage?.onChanged) {
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area !== "local") return;
       if (!("settings" in changes)) return;
-      const envelope = changes.settings.newValue;
-      if (envelope && typeof envelope === "object" && "settings" in envelope) {
-        const incoming = (envelope as { settings?: Settings }).settings;
-        if (incoming) debouncedApply(incoming);
-      }
+      // Reload through the validated path rather than trusting a raw cast of
+      // changes.settings.newValue.
+      void getSettings().then(syncRuntime);
     });
   }
 
@@ -131,9 +146,11 @@ export {
   adapter,
   routeListener,
   connectObserver,
+  disconnectObserver,
   teardown,
   reapplyAfterRouteChange,
-  refreshCurrentMarkers,
+  syncRuntime,
+  scheduleMarkerRefresh,
 };
 
 if (typeof document !== "undefined") {

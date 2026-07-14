@@ -4,6 +4,7 @@ import {
   applyAppearancePreset,
   detectAppearancePreset,
 } from "../features/appearance/presets.js";
+import { isAllowedColor } from "../settings/schema.js";
 
 /** Theme color fields exposed in the UI (writingBlockBackground is reserved). */
 const COLOR_FIELDS = [
@@ -21,9 +22,6 @@ type ColorField = (typeof COLOR_FIELDS)[number];
 /** Safe opaque fallback used when transparency is toggled off with no draft. */
 const FALLBACK_OPAQUE = "#1c2636";
 
-/** Latest loaded settings, used to preserve reserved/deferred fields on save. */
-let currentSettings: Settings | null = null;
-
 function el<T extends HTMLElement>(id: string): T {
   const node = document.getElementById(id);
   if (!node) throw new Error(`missing element #${id}`);
@@ -31,12 +29,13 @@ function el<T extends HTMLElement>(id: string): T {
 }
 
 /**
- * Read the form into a Partial<Settings> patch. The reserved writing-block
- * background is preserved from the latest loaded settings so editing unrelated
- * appearance fields never mutates it. Unknown/deferred fields are likewise
- * carried through from `currentSettings`.
+ * Read the form into a Partial<Settings> appearance/theme patch. The reserved
+ * writing-block background and all deferred feature sections are preserved from
+ * the freshly loaded `current` value, NOT re-sent from a module snapshot. An
+ * appearance form normally sends only `enabled`, `preset`, `appearance`, and
+ * `theme` so it never clobbers unrelated sections merely to preserve them.
  */
-function readForm(): Partial<Settings> {
+function readForm(current: Settings): Partial<Settings> {
   const enabled = el<HTMLInputElement>("enabled").checked;
   const preset = el<HTMLSelectElement>("preset").value as PresetName;
 
@@ -60,33 +59,35 @@ function readForm(): Partial<Settings> {
 
   const theme = {} as Settings["theme"];
   for (const f of COLOR_FIELDS) {
-    theme[f] = el<HTMLInputElement>(f).value;
+    const value = el<HTMLInputElement>(f).value.trim();
+    // Grammar gate: reject semicolons, braces, URLs, var(), calc(), and any
+    // non-hex string. The schema accepts #rgb / #rrggbb / #rrggbbaa /
+    // transparent (assistant only), never malformed CSS.
+    if (!isAllowedColor(value)) {
+      throw new Error(`invalid color for ${f}: ${value}`);
+    }
+    theme[f] = value;
   }
   theme.assistantBackground = assistantBackground;
-  // Preserve the reserved writing-block background from loaded settings.
-  theme.writingBlockBackground =
-    currentSettings?.theme.writingBlockBackground ?? "#161b25";
+  // Preserve the reserved writing-block background from the freshly loaded
+  // current settings (may have changed after the page originally loaded).
+  theme.writingBlockBackground = current.theme.writingBlockBackground;
 
-  // Preserve deferred feature fields from loaded settings.
-  const sidebar = currentSettings?.sidebar;
-  const history = currentSettings?.history;
-  const writingCopy = currentSettings?.writingCopy;
-  const codeBlocks = currentSettings?.codeBlocks;
-
-  return {
+  // Derive the preset from the fresh current value plus the newly read
+  // appearance/theme.
+  const merged: Settings = {
+    ...current,
     enabled,
     preset,
     appearance,
     theme,
-    ...(sidebar ? { sidebar } : {}),
-    ...(history ? { history } : {}),
-    ...(writingCopy ? { writingCopy } : {}),
-    ...(codeBlocks ? { codeBlocks } : {}),
   };
+  const derived = detectAppearancePreset(merged);
+
+  return { enabled, preset: derived, appearance, theme };
 }
 
 function writeForm(settings: Settings): void {
-  currentSettings = settings;
   el<HTMLInputElement>("enabled").checked = settings.enabled;
   el<HTMLSelectElement>("preset").value = settings.preset;
   const a = settings.appearance;
@@ -192,14 +193,14 @@ function bind(): void {
   });
 
   save.addEventListener("click", () => {
-    const patch = readForm();
+    // Read fresh settings first, then compute the appearance/theme patch from
+    // the current value so unrelated/deferred sections are preserved exactly.
     void getSettings().then((current) => {
-      const merged = { ...current, ...patch } as Settings;
-      const derived = detectAppearancePreset(merged);
-      const finalPatch: Partial<Settings> = { ...patch, preset: derived };
-      void updateSettings(finalPatch)
+      const patch = readForm(current);
+      void updateSettings(patch)
         .then((saved) => {
           writeForm(saved);
+          const derived = saved.preset;
           status.textContent =
             derived === "custom"
               ? "Saved as custom appearance."

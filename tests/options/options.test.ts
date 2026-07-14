@@ -140,3 +140,100 @@ describe("Options transparent assistant + reserved field (Blockers 6 & 7)", () =
     teardown();
   });
 });
+
+// Fix 4: Options builds its patch from freshly reloaded settings, so deferred
+// and reserved sections changed after the page loaded are preserved by an
+// appearance-only save. Fix 5: the UI must not corrupt any valid stored color
+// merely by opening and saving, and must reject malformed CSS color strings.
+describe("Options fresh-state preservation + color round-trip (Fix 4 & 5)", () => {
+  afterEach(() => vi.resetModules());
+
+  it("appearance-only save preserves deferred/reserved sections changed after load", async () => {
+    const s = cloneDefaults();
+    s.sidebar.mode = "hover";
+    s.history.visiblePairs = 5;
+    s.theme.writingBlockBackground = "#0a1b2c";
+    const { store, dom } = await setup(s);
+    // Simulate external change to deferred/reserved sections AFTER the page loaded.
+    const env = store.settings as StoredSettingsEnvelope;
+    env.settings.sidebar.mode = "button";
+    env.settings.history.visiblePairs = 12;
+    env.settings.theme.writingBlockBackground = "#123456";
+    // Make an appearance-only edit (enable compact spacing) and save.
+    (dom.window.document.getElementById("compactSpacing") as HTMLInputElement).checked = true;
+    click(dom, "save");
+    await new Promise((r) => setTimeout(r, 0));
+    const saved = storedSettings({ store, dom });
+    // The freshly reloaded state B must remain intact (not overwritten).
+    expect(saved.sidebar.mode).toBe("button");
+    expect(saved.history.visiblePairs).toBe(12);
+    expect(saved.theme.writingBlockBackground).toBe("#123456");
+    // Appearance change applied.
+    expect(saved.appearance.compactSpacing).toBe(true);
+    teardown();
+  });
+
+  it("a newly changed reserved writing-block color is preserved even after load", async () => {
+    const s = cloneDefaults();
+    s.theme.writingBlockBackground = "#0a1b2c";
+    const { store, dom } = await setup(s);
+    // External update to reserved writing-block after load.
+    const env = store.settings as StoredSettingsEnvelope;
+    env.settings.theme.writingBlockBackground = "#fedcba";
+    // Save an unrelated appearance edit.
+    (dom.window.document.getElementById("disableAnimations") as HTMLInputElement).checked = true;
+    click(dom, "save");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(storedSettings({ store, dom }).theme.writingBlockBackground).toBe("#fedcba");
+    teardown();
+  });
+
+  it("open-without-edit + Save preserves short-hex colors exactly", async () => {
+    const s = cloneDefaults();
+    s.theme.pageBackground = "#abc";
+    s.theme.conversationBackground = "#aabbcc";
+    s.theme.textColor = "#aabbccff";
+    const { store, dom } = await setup(s);
+    click(dom, "save");
+    await new Promise((r) => setTimeout(r, 0));
+    const saved = storedSettings({ store, dom }).theme;
+    expect(saved.pageBackground).toBe("#abc");
+    expect(saved.conversationBackground).toBe("#aabbcc");
+    expect(saved.textColor).toBe("#aabbccff");
+    teardown();
+  });
+
+  it("open-without-edit + Save preserves transparent assistant exactly", async () => {
+    const s = cloneDefaults();
+    s.theme.assistantBackground = "transparent";
+    const { store, dom } = await setup(s);
+    click(dom, "save");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(storedSettings({ store, dom }).theme.assistantBackground).toBe("transparent");
+    teardown();
+  });
+
+  it("semicolons, braces, URLs, var(), calc() and non-hex are rejected", async () => {
+    const s = cloneDefaults();
+    const { store, dom } = await setup(s);
+    const bad = [
+      "red; x",
+      "rgb(1,2,3)",
+      "url(http://evil)",
+      "var(--x)",
+      "calc(1px)",
+      "#gggggg",
+      "123456",
+    ];
+    for (const value of bad) {
+      const input = dom.window.document.getElementById("pageBackground") as HTMLInputElement;
+      input.value = value;
+      click(dom, "save");
+      await new Promise((r) => setTimeout(r, 0));
+      // Persisted value must remain the untouched default, never the bad string.
+      expect(storedSettings({ store, dom }).theme.pageBackground).toMatch(/^#/);
+      expect(storedSettings({ store, dom }).theme.pageBackground).not.toBe(value);
+    }
+    teardown();
+  });
+});
