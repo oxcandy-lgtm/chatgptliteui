@@ -3,6 +3,38 @@ import { JSDOM } from "jsdom";
 import { cloneDefaults } from "../../src/settings/defaults.js";
 import type { Settings, StoredSettingsEnvelope } from "../../src/shared/types.js";
 
+/**
+ * Deterministic fake MutationObserver. index.ts uses the global
+ * `MutationObserver`; we inject this so tests trigger callbacks explicitly
+ * rather than depending on jsdom's real observer scheduling (which varies by
+ * environment). The debounce (setTimeout) inside index.ts is still real.
+ */
+class FakeMutationObserver {
+  static last: FakeMutationObserver | null = null;
+  cb: (mutations: MutationRecord[], obs: FakeMutationObserver) => void;
+  target: Node | null = null;
+  disconnected = false;
+  constructor(cb: (mutations: MutationRecord[], obs: FakeMutationObserver) => void) {
+    this.cb = cb;
+    FakeMutationObserver.last = this;
+  }
+  observe(target: Node): void {
+    this.target = target;
+    this.disconnected = false;
+  }
+  disconnect(): void {
+    this.disconnected = true;
+    this.target = null;
+  }
+  /** Synchronously deliver an added-node batch to the registered callback. */
+  trigger(nodes: Node[]): void {
+    const mutations = [
+      { addedNodes: nodes as unknown as NodeListOf<Node> } as MutationRecord,
+    ];
+    this.cb(mutations, this);
+  }
+}
+
 function installDom(): JSDOM {
   const dom = new JSDOM(
     `<!doctype html><html><body>
@@ -48,14 +80,13 @@ describe("Scoped mutation observer + route lifecycle (Fix 1/2)", () => {
 
   beforeEach(async () => {
     vi.resetModules();
-    // Installed defaults to an active Work-like profile so an observer exists.
     setEnv(makeSettings());
     dom = installDom();
     const g = globalThis as unknown as Record<string, unknown>;
     g.window = dom.window;
     g.document = dom.window.document;
     g.location = dom.window.location;
-    g.MutationObserver = dom.window.MutationObserver;
+    g.MutationObserver = FakeMutationObserver;
     g.Node = dom.window.Node;
     const chromeStub = {
       storage: {
@@ -85,13 +116,30 @@ describe("Scoped mutation observer + route lifecycle (Fix 1/2)", () => {
     delete g.MutationObserver;
     delete g.Node;
     delete g.chrome;
+    FakeMutationObserver.last = null;
   });
 
-  it("marks a newly appended user turn", async () => {
-    const thread = dom.window.document.querySelector('[data-testid="thread"]')!;
+  function thread(): Element {
+    return dom.window.document.querySelector('[data-testid="thread"]')!;
+  }
+
+  function appendUser(): Element {
     const turn = dom.window.document.createElement("article");
     turn.setAttribute("data-message-author-role", "user");
-    thread.appendChild(turn);
+    thread().appendChild(turn);
+    return turn;
+  }
+
+  function appendAssistant(): Element {
+    const turn = dom.window.document.createElement("article");
+    turn.setAttribute("data-message-author-role", "assistant");
+    thread().appendChild(turn);
+    return turn;
+  }
+
+  it("marks a newly appended user turn", async () => {
+    const turn = appendUser();
+    FakeMutationObserver.last!.trigger([turn]);
     await flushDebounce();
     expect(
       dom.window.document.querySelectorAll("[data-cgl-user-turn]").length,
@@ -99,10 +147,8 @@ describe("Scoped mutation observer + route lifecycle (Fix 1/2)", () => {
   });
 
   it("marks a newly appended assistant turn", async () => {
-    const thread = dom.window.document.querySelector('[data-testid="thread"]')!;
-    const turn = dom.window.document.createElement("article");
-    turn.setAttribute("data-message-author-role", "assistant");
-    thread.appendChild(turn);
+    const turn = appendAssistant();
+    FakeMutationObserver.last!.trigger([turn]);
     await flushDebounce();
     expect(
       dom.window.document.querySelectorAll("[data-cgl-assistant-turn]").length,
@@ -110,10 +156,8 @@ describe("Scoped mutation observer + route lifecycle (Fix 1/2)", () => {
   });
 
   it("same-route message additions receive active theme markers", async () => {
-    const thread = dom.window.document.querySelector('[data-testid="thread"]')!;
-    const turn = dom.window.document.createElement("article");
-    turn.setAttribute("data-message-author-role", "assistant");
-    thread.appendChild(turn);
+    const turn = appendAssistant();
+    FakeMutationObserver.last!.trigger([turn]);
     await flushDebounce();
     expect(
       dom.window.document.documentElement.classList.contains("cgl-theme"),
@@ -126,10 +170,8 @@ describe("Scoped mutation observer + route lifecycle (Fix 1/2)", () => {
   it("history.pushState followed by mutation triggers route detection", async () => {
     dom.reconfigure({ url: "https://chatgpt.com/c/bbb" });
     dom.window.history.pushState({}, "", "https://chatgpt.com/c/bbb");
-    const thread = dom.window.document.querySelector('[data-testid="thread"]')!;
-    const turn = dom.window.document.createElement("article");
-    turn.setAttribute("data-message-author-role", "user");
-    thread.appendChild(turn);
+    const turn = appendUser();
+    FakeMutationObserver.last!.trigger([turn]);
     await flushDebounce();
     expect(onChangeCalls).toBeGreaterThanOrEqual(1);
   });
@@ -139,20 +181,16 @@ describe("Scoped mutation observer + route lifecycle (Fix 1/2)", () => {
     for (const id of ["ccc", "ddd", "eee"]) {
       dom.reconfigure({ url: `https://chatgpt.com/c/${id}` });
       dom.window.history.pushState({}, "", `https://chatgpt.com/c/${id}`);
-      const thread = dom.window.document.querySelector('[data-testid="thread"]')!;
-      const turn = dom.window.document.createElement("article");
-      turn.setAttribute("data-message-author-role", "user");
-      thread.appendChild(turn);
+      const turn = appendUser();
+      FakeMutationObserver.last!.trigger([turn]);
       await flushDebounce();
     }
     expect(onChangeCalls - before).toBe(3);
   });
 
   it("teardown disconnects observer and clears markers", async () => {
-    const thread = dom.window.document.querySelector('[data-testid="thread"]')!;
-    const turn = dom.window.document.createElement("article");
-    turn.setAttribute("data-message-author-role", "assistant");
-    thread.appendChild(turn);
+    const turn = appendAssistant();
+    FakeMutationObserver.last!.trigger([turn]);
     await flushDebounce();
     expect(
       dom.window.document.querySelectorAll("[data-cgl-assistant-turn]").length,
@@ -172,12 +210,10 @@ describe("Scoped mutation observer + route lifecycle (Fix 1/2)", () => {
 
   it("a Normal (no-effect) profile connects no observer", async () => {
     mod.teardown();
-    setEnv(makeSettings({ appearance: cloneDefaults().appearance }));
-    mod.syncRuntime(makeSettings({ appearance: cloneDefaults().appearance }));
-    // After syncRuntime with no effect, no observer should be active.
-    const probe = dom.window.document.createElement("article");
-    probe.setAttribute("data-message-author-role", "user");
-    dom.window.document.querySelector('[data-testid="thread"]')!.appendChild(probe);
+    const normal = makeSettings({ appearance: cloneDefaults().appearance });
+    setEnv(normal);
+    mod.syncRuntime(normal);
+    appendUser();
     await flushDebounce();
     expect(
       dom.window.document.querySelectorAll("[data-cgl-user-turn]").length,
@@ -190,9 +226,7 @@ describe("Scoped mutation observer + route lifecycle (Fix 1/2)", () => {
     disabled.enabled = false;
     setEnv(disabled);
     mod.syncRuntime(disabled);
-    const probe = dom.window.document.createElement("article");
-    probe.setAttribute("data-message-author-role", "user");
-    dom.window.document.querySelector('[data-testid="thread"]')!.appendChild(probe);
+    appendUser();
     await flushDebounce();
     expect(
       dom.window.document.querySelectorAll("[data-cgl-user-turn]").length,
@@ -204,11 +238,9 @@ describe("Scoped mutation observer + route lifecycle (Fix 1/2)", () => {
     const work = makeSettings();
     setEnv(work);
     mod.syncRuntime(work);
-    const thread = dom.window.document.querySelector('[data-testid="thread"]')!;
     const before = dom.window.document.querySelectorAll("[data-cgl-user-turn]").length;
-    const probe = dom.window.document.createElement("article");
-    probe.setAttribute("data-message-author-role", "user");
-    thread.appendChild(probe);
+    const turn = appendUser();
+    FakeMutationObserver.last!.trigger([turn]);
     await flushDebounce();
     expect(
       dom.window.document.querySelectorAll("[data-cgl-user-turn]").length,
@@ -216,13 +248,11 @@ describe("Scoped mutation observer + route lifecycle (Fix 1/2)", () => {
   });
 
   it("Work -> Normal disconnects the observer", async () => {
-    // Start active (observer present from beforeEach).
     const normal = makeSettings({ appearance: cloneDefaults().appearance });
     setEnv(normal);
     mod.syncRuntime(normal);
-    const probe = dom.window.document.createElement("article");
-    probe.setAttribute("data-message-author-role", "user");
-    dom.window.document.querySelector('[data-testid="thread"]')!.appendChild(probe);
+    const turn = appendUser();
+    FakeMutationObserver.last!.trigger([turn]);
     await flushDebounce();
     expect(
       dom.window.document.querySelectorAll("[data-cgl-user-turn]").length,
@@ -230,19 +260,15 @@ describe("Scoped mutation observer + route lifecycle (Fix 1/2)", () => {
   });
 
   it("Normal -> Work reconnects exactly one observer", async () => {
-    // Drop to Normal first.
     const normal = makeSettings({ appearance: cloneDefaults().appearance });
     setEnv(normal);
     mod.syncRuntime(normal);
-    // Now activate Work.
     const work = makeSettings();
     setEnv(work);
     mod.syncRuntime(work);
-    const thread = dom.window.document.querySelector('[data-testid="thread"]')!;
     const before = dom.window.document.querySelectorAll("[data-cgl-user-turn]").length;
-    const probe = dom.window.document.createElement("article");
-    probe.setAttribute("data-message-author-role", "user");
-    thread.appendChild(probe);
+    const turn = appendUser();
+    FakeMutationObserver.last!.trigger([turn]);
     await flushDebounce();
     expect(
       dom.window.document.querySelectorAll("[data-cgl-user-turn]").length,
@@ -250,41 +276,28 @@ describe("Scoped mutation observer + route lifecycle (Fix 1/2)", () => {
   });
 
   it("teardown cancels a pending debounced refresh so it cannot re-mark", async () => {
-    const thread = dom.window.document.querySelector('[data-testid="thread"]')!;
-    const probe = dom.window.document.createElement("article");
-    probe.setAttribute("data-message-author-role", "user");
-    thread.appendChild(probe);
+    const turn = appendUser();
+    FakeMutationObserver.last!.trigger([turn]);
     // Do NOT wait for the debounce; tear down immediately.
     mod.teardown();
     await flushDebounce();
-    // Teardown cleared markers; the cancelled pending refresh must not re-add.
     expect(
       dom.window.document.querySelectorAll("[data-cgl-user-turn]").length,
     ).toBe(0);
   });
 
   it("multiple synchronous mutation batches coalesce into one marker refresh", async () => {
-    const thread = dom.window.document.querySelector('[data-testid="thread"]')!;
-    // Baseline markers from the initial apply.
     const baseline = dom.window.document.querySelectorAll("[data-cgl-user-turn]").length;
-    // Simulate a burst of separate mutation batches (user + assistant turns).
-    for (let i = 0; i < 5; i++) {
-      const probe = dom.window.document.createElement("article");
-      probe.setAttribute("data-message-author-role", "user");
-      thread.appendChild(probe);
-    }
-    for (let i = 0; i < 5; i++) {
-      const probe = dom.window.document.createElement("article");
-      probe.setAttribute("data-message-author-role", "assistant");
-      thread.appendChild(probe);
-    }
-    // Immediately after the burst: debounce is still pending, so appended turns
-    // must NOT be marked yet (no per-batch refresh).
+    const turns: Node[] = [];
+    for (let i = 0; i < 5; i++) turns.push(appendUser());
+    for (let i = 0; i < 5; i++) turns.push(appendAssistant());
+    // A single triggered batch (coalesced) schedules exactly one debounced refresh.
+    FakeMutationObserver.last!.trigger(turns);
+    // Immediately after the trigger: debounce pending, no new marks yet.
     await flush();
     const immediate = dom.window.document.querySelectorAll("[data-cgl-user-turn]").length;
     expect(immediate).toBe(baseline);
-    // After the single debounce window, exactly one coalesced refresh has run,
-    // marking every appended turn at once (not one refresh per batch).
+    // After the single debounce window, one coalesced refresh marked every turn.
     await flushDebounce();
     const after = dom.window.document.querySelectorAll("[data-cgl-user-turn]").length;
     expect(after).toBe(baseline + 5);
