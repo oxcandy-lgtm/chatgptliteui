@@ -108,6 +108,44 @@ const V1_ULTRA_PATCH = {
 } as const;
 
 /**
+ * Derive activation flags for a v1 payload that migration has classified as
+ * `custom`. Schema v1 carried no explicit activation fields, so when a custom
+ * (manually edited) payload omits them we derive them from the stored values:
+ *  - a non-default width within bounds  -> useConversationWidth: true
+ *  - a non-default font within bounds   -> useFontSize: true
+ *  - any theme object present           -> useTheme: true
+ * (the Phase 0 runtime applied its stored theme whenever the extension was
+ * enabled, so a present theme means it was active).
+ *
+ * Explicit boolean flags always win and are never overridden.
+ */
+function deriveCustomV1Activation(
+  next: Settings,
+  v1: V1Settings,
+  appearance: V1Appearance | undefined,
+): void {
+  if (
+    !isBoolean(appearance?.useConversationWidth) &&
+    isIntIn(appearance?.conversationWidth, 480, 1600) &&
+    appearance.conversationWidth !== 768
+  ) {
+    next.appearance.useConversationWidth = true;
+  }
+
+  if (
+    !isBoolean(appearance?.useFontSize) &&
+    isIntIn(appearance?.fontSize, 12, 24) &&
+    appearance.fontSize !== 16
+  ) {
+    next.appearance.useFontSize = true;
+  }
+
+  if (!isBoolean(appearance?.useTheme) && isObject(v1.theme)) {
+    next.appearance.useTheme = true;
+  }
+}
+
+/**
  * Migrate a single v1 payload to v2. Caller has already validated the
  * envelope schema version and that `settings` is an object.
  */
@@ -122,16 +160,11 @@ function migrateV1(v1: V1Settings): Settings {
     if (isBoolean(a.disableBlur)) next.appearance.disableBlur = a.disableBlur;
     if (isBoolean(a.disableShadows)) next.appearance.disableShadows = a.disableShadows;
     if (isBoolean(a.compactSpacing)) next.appearance.compactSpacing = a.compactSpacing;
-    // Carry explicit v1 activation flags; derive from values when absent so a
-    // custom v1 width/font/theme is preserved as active rather than reset.
+    // Carry explicit v1 activation flags. Value-derived activation for custom
+    // profiles is centralized in deriveCustomV1Activation (see below) so it
+    // runs for every migration result classified as custom.
     if (isBoolean(a.useConversationWidth)) next.appearance.useConversationWidth = a.useConversationWidth;
-    else if (isIntIn(a.conversationWidth, 480, 1600) && a.conversationWidth !== 768) {
-      next.appearance.useConversationWidth = true;
-    }
     if (isBoolean(a.useFontSize)) next.appearance.useFontSize = a.useFontSize;
-    else if (isIntIn(a.fontSize, 12, 24) && a.fontSize !== 16) {
-      next.appearance.useFontSize = true;
-    }
     if (isBoolean(a.useTheme)) next.appearance.useTheme = a.useTheme;
     if (isIntIn(a.conversationWidth, 480, 1600)) {
       next.appearance.conversationWidth = a.conversationWidth;
@@ -191,6 +224,7 @@ function migrateV1(v1: V1Settings): Settings {
       // Manually edited v1 with a known preset name but non-matching profile:
       // preserve migrated values and mark custom.
       next.preset = "custom";
+      deriveCustomV1Activation(next, v1, a);
     }
   } else {
     // Manually edited v1 (or unknown preset) that does not exactly match a
@@ -198,11 +232,9 @@ function migrateV1(v1: V1Settings): Settings {
     // carry explicit activation flags, so derive them from the stored values.
     next.preset = "custom";
     // The Phase 0 runtime applied its stored theme values whenever enabled, so
-    // a present theme object means the theme was active. Derive useTheme from
-    // theme presence only when no explicit flag was supplied.
-    if (!isBoolean(a?.useTheme) && isObject(v1.theme)) {
-      next.appearance.useTheme = true;
-    }
+    // a present theme object means the theme was active. Derive useTheme (and
+    // width/font) from stored values via the shared custom-activation helper.
+    deriveCustomV1Activation(next, v1, a);
   }
 
   return next;

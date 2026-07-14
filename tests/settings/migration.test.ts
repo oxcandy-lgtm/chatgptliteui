@@ -415,4 +415,180 @@ describe("v1 -> v2 migration", () => {
       expect(migrateEnvelope(v1Envelope(v1))).toBeNull();
     });
   });
+
+  // Final-contract migration correction: a known preset name whose actual
+  // v1 appearance does NOT match the locked profile must classify as custom AND
+  // derive theme/width/font activation from the stored values (flag-less v1).
+  describe("Final-contract: known-preset non-matching profile -> custom with derived activation", () => {
+    it("preset work + untouched-default appearance + valid theme -> custom, useTheme true, colors preserved", () => {
+      const v1 = {
+        enabled: true,
+        preset: "work",
+        appearance: {
+          disableAnimations: false,
+          disableBlur: false,
+          disableShadows: false,
+          compactSpacing: false,
+          conversationWidth: 768,
+          fontSize: 16,
+        },
+        theme: {
+          pageBackground: "#101010",
+          conversationBackground: "#111111",
+          userBackground: "#222222",
+          assistantBackground: "#333333",
+          inputBackground: "#444444",
+          codeBackground: "#555555",
+          writingBlockBackground: "#666666",
+          textColor: "#eeeeee",
+        },
+      };
+      const s = migrateEnvelope(v1Envelope(v1)) as Settings;
+      expect(s.preset).toBe("custom");
+      expect(s.appearance.useTheme).toBe(true);
+      expect(s.theme.pageBackground).toBe("#101010");
+      expect(s.theme.assistantBackground).toBe("#333333");
+      expect(s.theme.writingBlockBackground).toBe("#666666");
+      expect(s.theme.textColor).toBe("#eeeeee");
+    });
+
+    it("known preset name + custom width + valid theme -> custom, width active, theme active", () => {
+      const v1 = {
+        preset: "minimal",
+        appearance: {
+          disableAnimations: false,
+          disableBlur: false,
+          disableShadows: false,
+          compactSpacing: false,
+          conversationWidth: 1100, // non-default vs locked 768
+          fontSize: 16,
+        },
+        theme: {
+          pageBackground: "#101010",
+          conversationBackground: "#111111",
+          userBackground: "#222222",
+          assistantBackground: "#333333",
+          inputBackground: "#444444",
+          codeBackground: "#555555",
+          writingBlockBackground: "#666666",
+          textColor: "#eeeeee",
+        },
+      };
+      const s = migrateEnvelope(v1Envelope(v1)) as Settings;
+      expect(s.preset).toBe("custom");
+      expect(s.appearance.useConversationWidth).toBe(true);
+      expect(s.appearance.conversationWidth).toBe(1100);
+      expect(s.appearance.useTheme).toBe(true);
+    });
+
+    it("known preset name + invalid theme -> fail closed", () => {
+      const v1 = {
+        preset: "work",
+        appearance: {
+          disableAnimations: false,
+          disableBlur: false,
+          disableShadows: false,
+          compactSpacing: false,
+          conversationWidth: 768,
+          fontSize: 16,
+        },
+        theme: {
+          pageBackground: "rgb(1,2,3)", // invalid per grammar
+          conversationBackground: "#111111",
+          userBackground: "#222222",
+          assistantBackground: "#333333",
+          inputBackground: "#444444",
+          codeBackground: "#555555",
+          writingBlockBackground: "#666666",
+          textColor: "#eeeeee",
+        },
+      };
+      expect(migrateEnvelope(v1Envelope(v1))).toBeNull();
+    });
+
+    it("exact untouched minimal preset -> locked profile, useTheme false", () => {
+      const v1 = {
+        preset: "minimal",
+        appearance: {
+          disableAnimations: true,
+          disableBlur: true,
+          disableShadows: true,
+          compactSpacing: false,
+          conversationWidth: 768,
+          fontSize: 16,
+        },
+      };
+      const s = migrateEnvelope(v1Envelope(v1)) as Settings;
+      expect(s.preset).toBe("minimal");
+      expect(s.appearance.disableAnimations).toBe(true);
+      expect(s.appearance.useTheme).toBe(false);
+      expect(s.appearance.useConversationWidth).toBe(false);
+    });
+
+    it("exact untouched work preset -> locked profile, useTheme false", () => {
+      const v1 = {
+        preset: "work",
+        appearance: {
+          disableAnimations: true,
+          disableBlur: true,
+          disableShadows: true,
+          compactSpacing: true,
+          conversationWidth: 880,
+          fontSize: 16,
+        },
+      };
+      const s = migrateEnvelope(v1Envelope(v1)) as Settings;
+      expect(s.preset).toBe("work");
+      expect(s.appearance.useTheme).toBe(false);
+      expect(s.appearance.conversationWidth).toBe(880);
+    });
+
+    it("exact untouched ultra-lite preset -> locked profile, useTheme false", () => {
+      const v1 = {
+        preset: "ultra-lite",
+        appearance: {
+          disableAnimations: true,
+          disableBlur: true,
+          disableShadows: true,
+          compactSpacing: true,
+          conversationWidth: 720,
+          fontSize: 15,
+        },
+      };
+      const s = migrateEnvelope(v1Envelope(v1)) as Settings;
+      expect(s.preset).toBe("ultra-lite");
+      expect(s.appearance.useTheme).toBe(false);
+      expect(s.appearance.fontSize).toBe(15);
+    });
+
+    it("untouched Normal remains a no-op (preset normal, useTheme false)", () => {
+      const v1 = {
+        enabled: true,
+        preset: "normal",
+        appearance: {
+          disableAnimations: false,
+          disableBlur: false,
+          disableShadows: false,
+          compactSpacing: false,
+          conversationWidth: 768,
+          fontSize: 16,
+        },
+        theme: {
+          pageBackground: "#101318",
+          conversationBackground: "#151922",
+          userBackground: "#1c2636",
+          assistantBackground: "transparent",
+          inputBackground: "#1c222d",
+          codeBackground: "#11151c",
+          writingBlockBackground: "#161b25",
+          textColor: "#e7eaf0",
+        },
+      };
+      const s = migrateEnvelope(v1Envelope(v1)) as Settings;
+      expect(s.preset).toBe("normal");
+      expect(s.appearance.useTheme).toBe(false);
+      expect(s.appearance.useConversationWidth).toBe(false);
+      expect(s.appearance.useFontSize).toBe(false);
+    });
+  });
 });
