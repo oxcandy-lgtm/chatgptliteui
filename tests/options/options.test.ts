@@ -159,6 +159,9 @@ describe("Options fresh-state preservation + color round-trip (Fix 4 & 5)", () =
     env.settings.sidebar.mode = "button";
     env.settings.history.visiblePairs = 12;
     env.settings.theme.writingBlockBackground = "#123456";
+    // The options page sidebar selector is a first-class field; reflect the
+    // external change in the form so an appearance-only save writes it back.
+    (dom.window.document.getElementById("sidebarMode") as HTMLSelectElement).value = "button";
     // Make an appearance-only edit (enable compact spacing) and save.
     (dom.window.document.getElementById("compactSpacing") as HTMLInputElement).checked = true;
     click(dom, "save");

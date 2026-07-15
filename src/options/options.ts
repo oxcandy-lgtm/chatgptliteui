@@ -38,6 +38,7 @@ function el<T extends HTMLElement>(id: string): T {
 function readForm(current: Settings): Partial<Settings> {
   const enabled = el<HTMLInputElement>("enabled").checked;
   const preset = el<HTMLSelectElement>("preset").value as PresetName;
+  const sidebarMode = el<HTMLSelectElement>("sidebarMode").value as Settings["sidebar"]["mode"];
 
   const appearance: Settings["appearance"] = {
     disableAnimations: el<HTMLInputElement>("disableAnimations").checked,
@@ -81,15 +82,17 @@ function readForm(current: Settings): Partial<Settings> {
     preset,
     appearance,
     theme,
+    sidebar: { mode: sidebarMode },
   };
   const derived = detectAppearancePreset(merged);
 
-  return { enabled, preset: derived, appearance, theme };
+  return { enabled, preset: derived, appearance, theme, sidebar: { mode: sidebarMode } };
 }
 
 function writeForm(settings: Settings): void {
   el<HTMLInputElement>("enabled").checked = settings.enabled;
   el<HTMLSelectElement>("preset").value = settings.preset;
+  el<HTMLSelectElement>("sidebarMode").value = settings.sidebar.mode;
   const a = settings.appearance;
   el<HTMLInputElement>("disableAnimations").checked = a.disableAnimations;
   el<HTMLInputElement>("disableBlur").checked = a.disableBlur;

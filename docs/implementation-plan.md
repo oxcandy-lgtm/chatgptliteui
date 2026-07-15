@@ -54,12 +54,30 @@ variables. No ChatGPT class is ever altered.
 - No external network requests; no new Chrome permission; no chat content
   persisted.
 
-## Phase 3 — Sidebar control
+## Phase 3 — Sidebar control (implemented)
 
-- Modes: visible, hover, button, hidden.
-- Keyboard shortcut to toggle.
-- Never breaks ChatGPT conversation navigation; falls back to official UI when
-  detection fails.
+Safe sidebar visibility controls layered on top of the official ChatGPT
+sidebar, without deleting, detaching, rewriting, reordering, or cloning
+ChatGPT navigation:
+
+- Modes: `visible`, `hover`, `button`, `hidden`.
+- `visible`: official sidebar unchanged.
+- `hover`: closed by default; an extension-owned Shadow DOM edge rail opens it
+  on pointer or focus; a short debounce closes it on leave.
+- `button`: closed by default; an extension-owned Shadow DOM toggle button
+  (with `aria-label`/`aria-expanded`/focus style) opens it; `Esc` closes it.
+- `hidden`: closed with no persistent on-page control; the fixed
+  `Alt+Shift+L` shortcut can temporarily reveal it, as can the popup/options.
+- Keyboard shortcut `Alt+Shift+L` (via the content script, not
+  `chrome.commands`): enabled-only, ignores repeat/composition, ignores
+  editable fields, and calls `preventDefault` only on an exact modifier+code
+  match. Transient toggle; not persisted.
+- Strong detection gate (`isSafeSidebarDetection`) plus safe wrapper
+  normalization. The only permitted mutation on the ChatGPT sidebar is one
+  extension-owned `data-cgl-sidebar-target` marker; hiding is the
+  `cgl-sidebar-closed` root class; restoration is simply removing
+  extension-owned state. Detection failure preserves the official UI.
+- No new Chrome permission, no Service Worker, no network behavior.
 
 ## Phase 4 — Writing-block copy controls
 
