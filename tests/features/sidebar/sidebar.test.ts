@@ -79,6 +79,8 @@ function installDom(html: string): JSDOM {
   const g = globalThis as unknown as Record<string, unknown>;
   g.window = dom.window;
   g.document = dom.window.document;
+  g.Node = dom.window.Node;
+  g.HTMLElement = dom.window.HTMLElement;
   return dom;
 }
 
@@ -285,15 +287,105 @@ describe("sidebar modes (non-destructive behavior)", () => {
     controller.apply(settings("hover"));
     expect(controller.isHostMounted).toBe(true);
     expect(d.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(true);
-    controller["onRailEnter"]();
-    expect(d.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(false);
-    controller["onRailLeave"]();
-    // After debounce the sidebar should close again.
+    const hostEl = d.window.document.getElementById("cgl-sidebar-control-host")!;
+    const rail = hostEl.shadowRoot!.querySelector(".cgl-rail")!;
     vi.useFakeTimers();
-    controller["onRailLeave"]();
+    // Pointer entering the rail opens the sidebar.
+    rail.dispatchEvent(new d.window.Event("pointerenter"));
+    expect(d.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(false);
+    // Pointer leaving the rail schedules a close after debounce.
+    rail.dispatchEvent(new d.window.Event("pointerleave"));
     vi.advanceTimersByTime(250);
     expect(d.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(true);
     vi.useRealTimers();
+  });
+
+  describe("Fix 1 — hover pointer/focus separation (non-destructive behavior)", () => {
+    function target(): HTMLElement {
+      return d.window.document.querySelector('[data-testid="sidebar"]') as HTMLElement;
+    }
+    function enterPointer(): void {
+      target().dispatchEvent(new d.window.Event("pointerenter"));
+    }
+    function leavePointer(): void {
+      target().dispatchEvent(new d.window.Event("pointerleave"));
+    }
+    function focusIn(): void {
+      target().dispatchEvent(new d.window.FocusEvent("focusin"));
+    }
+    function focusOut(relatedInside = false): void {
+      const ev = new d.window.FocusEvent("focusout");
+      if (relatedInside) {
+        Object.defineProperty(ev, "relatedTarget", { value: target().querySelector("nav") });
+      } else {
+        Object.defineProperty(ev, "relatedTarget", { value: d.window.document.body });
+      }
+      target().dispatchEvent(ev);
+    }
+
+    it("pointer enters sidebar, then leaves -> closes after debounce", () => {
+      controller.apply(settings("hover"));
+      vi.useFakeTimers();
+      enterPointer();
+      expect(d.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(false);
+      leavePointer();
+      vi.advanceTimersByTime(250);
+      expect(d.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(true);
+      vi.useRealTimers();
+    });
+
+    it("focus enters sidebar -> remains open", () => {
+      controller.apply(settings("hover"));
+      focusIn();
+      expect(controller.transientState.focusWithin).toBe(true);
+      expect(d.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(false);
+    });
+
+    it("focus moves between two descendants -> remains open", () => {
+      controller.apply(settings("hover"));
+      focusIn();
+      // Simulate moving focus to another descendant: focusout with relatedTarget
+      // still inside the sidebar, then focusin on the new descendant.
+      focusOut(true);
+      expect(controller.transientState.focusWithin).toBe(true);
+      focusIn();
+      expect(controller.transientState.focusWithin).toBe(true);
+      expect(d.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(false);
+    });
+
+    it("focus leaves sidebar entirely -> closes after debounce", () => {
+      controller.apply(settings("hover"));
+      vi.useFakeTimers();
+      focusIn();
+      focusOut(false);
+      vi.advanceTimersByTime(250);
+      expect(d.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(true);
+      vi.useRealTimers();
+    });
+
+    it("pointer entry never leaves focusWithin stuck true", () => {
+      controller.apply(settings("hover"));
+      focusIn();
+      // Pointer leaves (schedules close) but focus is still within.
+      leavePointer();
+      // Pointer re-enters: only hoverActive set, focusWithin untouched.
+      enterPointer();
+      expect(controller.transientState.focusWithin).toBe(true);
+      expect(controller.transientState.hoverActive).toBe(true);
+    });
+
+    it("teardown cancels a pending close timer", () => {
+      controller.apply(settings("hover"));
+      vi.useFakeTimers();
+      enterPointer();
+      leavePointer();
+      controller.teardown();
+      vi.advanceTimersByTime(500);
+      // After teardown the sidebar is restored (no closed class, no host).
+      expect(d.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(false);
+      expect(controller.isHostMounted).toBe(false);
+      vi.useRealTimers();
+    });
   });
 
   it("mode change clears transient override", () => {
@@ -481,6 +573,98 @@ describe("sidebar markers", () => {
     clearAllSidebarMarkers(d.window.document);
     expect(d.window.document.querySelector('[data-cgl-sidebar-target]')).toBeNull();
     clearAllSidebarMarkers(d.window.document);
+    expect(d.window.document.querySelector('[data-cgl-sidebar-target]')).toBeNull();
+  });
+});
+
+describe("Fix 6 — detection containment hardening", () => {
+  let d: JSDOM;
+  beforeEach(() => {
+    d = installDom(sidebarFixture("left"));
+  });
+  afterEach(() => {
+    const g = globalThis as unknown as Record<string, unknown>;
+    delete g.window;
+    delete g.document;
+  });
+
+  function adapterFor(el: Element | null, confidence: DetectionResult["confidence"]): ChatGptAdapter {
+    const main = d.window.document.querySelector('[role="main"]')!;
+    return new StubAdapter({
+      sidebar: det({ found: !!el, confidence, element: el as HTMLElement | null, elements: el ? [el as HTMLElement] : [] }),
+      container: det({ found: true, confidence: "high", element: main as HTMLElement | null, elements: [main as HTMLElement] }),
+    }) as unknown as ChatGptAdapter;
+  }
+
+  it("wrapper containing conversation main is rejected", () => {
+    const aside = d.window.document.querySelector('[data-testid="sidebar"]') as HTMLElement;
+    const main = d.window.document.querySelector('[role="main"]') as HTMLElement;
+    // Move main inside the sidebar wrapper.
+    aside.appendChild(main);
+    const a = adapterFor(aside, "medium");
+    expect(isSafeSidebarDetection(a.detectSidebar(), a as unknown as ChatGptAdapter)).toBe(false);
+    expect(normalizeSidebarTarget(a.detectSidebar(), a as unknown as ChatGptAdapter)).toBeNull();
+  });
+
+  it("wrapper containing composer is rejected", () => {
+    const aside = d.window.document.querySelector('[data-testid="sidebar"]') as HTMLElement;
+    const composer = d.window.document.createElement("div");
+    composer.setAttribute("role", "textbox");
+    aside.appendChild(composer);
+    const a = new StubAdapter({
+      sidebar: det({ found: true, confidence: "medium", element: aside, elements: [aside] }),
+      container: det({ found: true, confidence: "high", element: d.window.document.querySelector('[role="main"]') as HTMLElement, elements: [] }),
+      composer: det({ found: true, confidence: "high", element: composer, elements: [composer] }),
+    }) as unknown as ChatGptAdapter;
+    expect(isSafeSidebarDetection(a.detectSidebar(), a)).toBe(false);
+  });
+
+  it("wrapper containing a dialog is rejected", () => {
+    const aside = d.window.document.querySelector('[data-testid="sidebar"]') as HTMLElement;
+    const dialog = d.window.document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    aside.appendChild(dialog);
+    const a = adapterFor(aside, "medium");
+    expect(isSafeSidebarDetection(a.detectSidebar(), a as unknown as ChatGptAdapter)).toBe(false);
+  });
+
+  it("wrapper containing multiple nav landmarks is rejected", () => {
+    const aside = d.window.document.querySelector('[data-testid="sidebar"]') as HTMLElement;
+    const extra = d.window.document.createElement("nav");
+    extra.setAttribute("aria-label", "other history");
+    aside.appendChild(extra);
+    const a = adapterFor(aside, "medium");
+    expect(isSafeSidebarDetection(a.detectSidebar(), a as unknown as ChatGptAdapter)).toBe(false);
+  });
+
+  it("safe unique wrapper accepted", () => {
+    const aside = d.window.document.querySelector('[data-testid="sidebar"]') as HTMLElement;
+    const a = adapterFor(aside, "medium");
+    expect(isSafeSidebarDetection(a.detectSidebar(), a as unknown as ChatGptAdapter)).toBe(true);
+    expect(normalizeSidebarTarget(a.detectSidebar(), a as unknown as ChatGptAdapter)).toBe(aside);
+  });
+
+  it("unsafe wrapper falls back to safe inner nav", () => {
+    // Wrapper contains conversation main (unsafe) but the inner nav is safe.
+    const aside = d.window.document.querySelector('[data-testid="sidebar"]') as HTMLElement;
+    const main = d.window.document.querySelector('[role="main"]') as HTMLElement;
+    aside.appendChild(main);
+    const nav = aside.querySelector("nav") as HTMLElement;
+    const a = new StubAdapter({
+      sidebar: det({ found: true, confidence: "high", element: nav, elements: [nav] }),
+      container: det({ found: true, confidence: "high", element: main as HTMLElement, elements: [main as HTMLElement] }),
+    }) as unknown as ChatGptAdapter;
+    expect(isSafeSidebarDetection(a.detectSidebar(), a)).toBe(true);
+    // Normalization should refuse the unsafe wrapper and fall back to the nav.
+    const norm = normalizeSidebarTarget(a.detectSidebar(), a);
+    expect(norm).toBe(nav);
+  });
+
+  it("broad app-shell candidate never receives the sidebar marker", () => {
+    const app = d.window.document.getElementById("app") as HTMLElement;
+    const a = adapterFor(app, "medium");
+    expect(isSafeSidebarDetection(a.detectSidebar(), a as unknown as ChatGptAdapter)).toBe(false);
+    expect(findSafeSidebarTarget(a)).toBeNull();
     expect(d.window.document.querySelector('[data-cgl-sidebar-target]')).toBeNull();
   });
 });

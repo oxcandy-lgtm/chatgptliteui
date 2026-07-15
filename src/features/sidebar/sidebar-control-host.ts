@@ -86,6 +86,9 @@ export class SidebarControlHost {
       return;
     }
     this.unmount();
+    // unmount() resets handlers to {}; re-bind the supplied handlers so the
+    // freshly created rail/focus listeners resolve to live callbacks.
+    this.handlers = handlers;
 
     const host = document.createElement("div");
     host.id = SIDEBAR_HOST_ID;

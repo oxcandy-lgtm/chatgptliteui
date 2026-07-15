@@ -74,7 +74,9 @@ describe("sidebar content runtime + keyboard", () => {
   let dom: JSDOM;
   let mod: typeof import("../../src/content/index.js");
   let lastEnv: Settings;
-  const keymap: ((e: KeyboardEvent) => void)[] = [];
+  // Listener registry implementing BOTH add/remove so we can verify the exact
+  // same function reference is attached and later removed (Fix 7).
+  const listeners = new Map<string, Set<(e: KeyboardEvent) => void>>();
 
   function setEnv(s: Settings): void {
     lastEnv = s;
@@ -104,31 +106,43 @@ describe("sidebar content runtime + keyboard", () => {
     g.HTMLElement = dom.window.HTMLElement;
     g.MutationObserver = FakeMutationObserver;
     g.Node = dom.window.Node;
+    listeners.clear();
     dom.window.document.addEventListener = ((type: string, cb: (e: KeyboardEvent) => void) => {
-      if (type === "keydown") keymap.push(cb);
+      if (!listeners.has(type)) listeners.set(type, new Set());
+      listeners.get(type)!.add(cb);
       return undefined;
     }) as typeof dom.window.document.addEventListener;
+    dom.window.document.removeEventListener = ((type: string, cb: (e: KeyboardEvent) => void) => {
+      listeners.get(type)?.delete(cb);
+      return undefined;
+    }) as typeof dom.window.document.removeEventListener;
+    const onChangedCbs: ((changes: Record<string, unknown>, area: string) => void)[] = [];
     const chromeStub = {
       storage: {
         local: {
           get: (k: string) => Promise.resolve({ [k]: { schemaVersion: 2, settings: lastEnv } }),
           set: (_v: unknown) => Promise.resolve(),
         },
-        onChanged: { addListener: () => {} },
+        onChanged: { addListener: (cb: (changes: Record<string, unknown>, area: string) => void) => {
+          onChangedCbs.push(cb);
+        } },
       },
     };
     g.chrome = chromeStub;
     mod = await import("../../src/content/index.js");
+    // Expose onChanged for Fix 5 tests.
+    (mod as unknown as { __onChanged: typeof onChangedCbs }).__onChanged = onChangedCbs;
   });
 
   afterEach(() => {
     if (mod) mod.teardown();
-    keymap.length = 0;
+    listeners.clear();
     const g = globalThis as unknown as Record<string, unknown>;
     delete g.window;
     delete g.document;
     delete g.location;
     delete g.KeyboardEvent;
+    delete g.HTMLElement;
     delete g.MutationObserver;
     delete g.Node;
     delete g.chrome;
@@ -137,6 +151,10 @@ describe("sidebar content runtime + keyboard", () => {
 
   function sidebarEl(): Element {
     return dom.window.document.querySelector('[data-testid="sidebar"]')!;
+  }
+
+  function keyboardListeners(): ((e: KeyboardEvent) => void)[] {
+    return Array.from(listeners.get("keydown") ?? []) as ((e: KeyboardEvent) => void)[];
   }
 
   it("non-visible sidebar mode activates structural observation even on Normal appearance", async () => {
@@ -152,7 +170,6 @@ describe("sidebar content runtime + keyboard", () => {
     await new Promise((r) => setTimeout(r, 0));
     const obs = FakeMutationObserver.last;
     expect(obs === null || obs.disconnected).toBe(true);
-    // Official sidebar untouched (no closed class, no marker).
     expect(dom.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(false);
   });
 
@@ -215,16 +232,62 @@ describe("sidebar content runtime + keyboard", () => {
     expect(dom.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(true);
   });
 
+  // ---- Fix 2: keyboard listener lifecycle ----
+
+  function toggleListeners(): ((e: KeyboardEvent) => void)[] {
+    return keyboardListeners().filter((cb) => cb === mod.handleKeydown);
+  }
+
+  it("enabled attaches exactly one keydown listener; disabled removes it", async () => {
+    await mod.syncRuntime(makeSettings({ preset: "normal", sidebar: { mode: "hidden" } }));
+    expect(toggleListeners().length).toBe(1);
+    const ref = toggleListeners()[0];
+    await mod.syncRuntime(makeSettings({ preset: "normal", sidebar: { mode: "hidden" }, enabled: false }));
+    // Same reference removed, none remaining.
+    expect(toggleListeners()).not.toContain(ref);
+    expect(toggleListeners().length).toBe(0);
+  });
+
+  it("repeated enable/apply does not register duplicate listeners", async () => {
+    await mod.syncRuntime(makeSettings({ preset: "normal", sidebar: { mode: "hidden" } }));
+    await mod.syncRuntime(makeSettings({ preset: "normal", sidebar: { mode: "hidden" } }));
+    await mod.syncRuntime(makeSettings({ preset: "work", sidebar: { mode: "hover" } }));
+    // Only the toggle handler (mod.handleKeydown) must be registered once.
+    expect(toggleListeners().length).toBe(1);
+  });
+
+  it("re-enable restores exactly one listener", async () => {
+    await mod.syncRuntime(makeSettings({ preset: "normal", sidebar: { mode: "hidden" }, enabled: false }));
+    expect(toggleListeners().length).toBe(0);
+    await mod.syncRuntime(makeSettings({ preset: "normal", sidebar: { mode: "hidden" } }));
+    expect(toggleListeners().length).toBe(1);
+  });
+
+  it("teardown removes the listener", async () => {
+    await mod.syncRuntime(makeSettings({ preset: "normal", sidebar: { mode: "hidden" } }));
+    expect(toggleListeners().length).toBe(1);
+    mod.teardown();
+    expect(toggleListeners().length).toBe(0);
+  });
+
+  it("disabled extension does not call preventDefault and does not toggle", async () => {
+    await mod.syncRuntime(makeSettings({ preset: "normal", sidebar: { mode: "hidden" }, enabled: false }));
+    const ref = mod.handleKeydown;
+    const ev = keyEvent(dom.window, { alt: true, shift: true });
+    ref(ev);
+    expect(ev.defaultPrevented).toBe(false);
+  });
+
   it("exact Alt+Shift+L toggles and calls preventDefault; wrong modifiers do nothing", async () => {
     await mod.syncRuntime(makeSettings({ preset: "normal", sidebar: { mode: "hidden" } }));
     await new Promise((r) => setTimeout(r, 0));
     expect(dom.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(true);
     const wrong = keyEvent(dom.window, { alt: true, shift: true, ctrl: true, meta: false, code: "KeyL" });
-    keymap.forEach((cb) => cb(wrong));
+    mod.handleKeydown(wrong);
     expect(wrong.defaultPrevented).toBe(false);
     expect(dom.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(true);
     const good = keyEvent(dom.window, { alt: true, shift: true, ctrl: false, meta: false, code: "KeyL" });
-    keymap.forEach((cb) => cb(good));
+    mod.handleKeydown(good);
     await new Promise((r) => setTimeout(r, 20));
     expect(good.defaultPrevented).toBe(true);
     expect(dom.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(false);
@@ -244,5 +307,194 @@ describe("sidebar content runtime + keyboard", () => {
     const good = keyEvent(dom.window, { alt: true, shift: true });
     handler(good);
     expect(good.defaultPrevented).toBe(true);
+  });
+
+  // ---- Fix 3: Visible-mode temporary hide activates observer + survives SPA ----
+
+  it("Visible + Normal initially has no observer", async () => {
+    await mod.syncRuntime(makeSettings({ preset: "normal", sidebar: { mode: "visible" } }));
+    await new Promise((r) => setTimeout(r, 0));
+    const obs = FakeMutationObserver.last;
+    expect(obs === null || obs.disconnected).toBe(true);
+  });
+
+  it("shortcut hides Visible sidebar and attaches one observer", async () => {
+    await mod.syncRuntime(makeSettings({ preset: "normal", sidebar: { mode: "visible" } }));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(FakeMutationObserver.last === null || FakeMutationObserver.last!.disconnected).toBe(true);
+    // Toggle via the real handler.
+    mod.handleKeydown(keyEvent(dom.window, { alt: true, shift: true }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(dom.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(true);
+    expect(FakeMutationObserver.last!.disconnected).toBe(false);
+    expect(FakeMutationObserver.last!.target).not.toBe(dom.window.document.body);
+  });
+
+  it("sidebar replacement is rebound while temporarily hidden (Visible)", async () => {
+    await mod.syncRuntime(makeSettings({ preset: "normal", sidebar: { mode: "visible" } }));
+    await new Promise((r) => setTimeout(r, 0));
+    mod.handleKeydown(keyEvent(dom.window, { alt: true, shift: true }));
+    await new Promise((r) => setTimeout(r, 20));
+    const obs = FakeMutationObserver.last!;
+    // Verify observer is active.
+    expect(obs.disconnected).toBe(false);
+    sidebarEl().remove();
+    const newAside = dom.window.document.createElement("aside");
+    newAside.setAttribute("data-testid", "sidebar");
+    newAside.innerHTML = `<nav aria-label="Chat history"><a href="/c/9">z</a></nav>`;
+    dom.window.document.getElementById("app")!.appendChild(newAside);
+    obs.trigger([newAside]);
+    await flushDebounce();
+    expect(newAside.getAttribute("data-cgl-sidebar-target")).toBe("true");
+  });
+
+  it("SPA route refresh preserves the closed override (Visible)", async () => {
+    await mod.syncRuntime(makeSettings({ preset: "normal", sidebar: { mode: "visible" } }));
+    await new Promise((r) => setTimeout(r, 0));
+    mod.handleKeydown(keyEvent(dom.window, { alt: true, shift: true }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(dom.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(true);
+    // Simulate SPA route change: bootstrap re-applies from storage (override is
+    // not persisted, so the controller must retain it across reapply).
+    await mod.syncRuntime(makeSettings({ preset: "normal", sidebar: { mode: "visible" } }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(dom.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(true);
+  });
+
+  it("shortcut restores Visible mode and disconnects the observer when no other effect exists", async () => {
+    await mod.syncRuntime(makeSettings({ preset: "normal", sidebar: { mode: "visible" } }));
+    await new Promise((r) => setTimeout(r, 0));
+    mod.handleKeydown(keyEvent(dom.window, { alt: true, shift: true }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(dom.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(true);
+    expect(FakeMutationObserver.last!.disconnected).toBe(false);
+    // Toggle back: cleared override -> no observer.
+    mod.handleKeydown(keyEvent(dom.window, { alt: true, shift: true }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(dom.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(false);
+    expect(FakeMutationObserver.last!.disconnected).toBe(true);
+  });
+
+  it("no duplicate observers across toggles; final state matches effective runtime", async () => {
+    await mod.syncRuntime(makeSettings({ preset: "normal", sidebar: { mode: "visible" } }));
+    await new Promise((r) => setTimeout(r, 0));
+    // Visible initially: no observer.
+    expect(FakeMutationObserver.last === null || FakeMutationObserver.last!.disconnected).toBe(true);
+
+    const created: FakeMutationObserver[] = [];
+    for (let i = 0; i < 4; i++) {
+      mod.handleKeydown(keyEvent(dom.window, { alt: true, shift: true }));
+      await new Promise((r) => setTimeout(r, 10));
+      created.push(FakeMutationObserver.last!);
+    }
+
+    // Across the toggles, exactly one observer is active at any time: every
+    // prior instance must have been disconnected before a replacement.
+    const active = created.filter((o) => !o.disconnected);
+    expect(active.length).toBeLessThanOrEqual(1);
+
+    // 4 toggles from Visible => no temporary override => observer disconnected.
+    expect(dom.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(false);
+    expect(FakeMutationObserver.last!.disconnected).toBe(true);
+
+    // Toggling back to a transient-closed state reconnects exactly one observer.
+    mod.handleKeydown(keyEvent(dom.window, { alt: true, shift: true }));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(dom.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(true);
+    expect(FakeMutationObserver.last!.disconnected).toBe(false);
+  });
+
+  // ---- Fix 4: observer connect race protection (delayed storage promises) ----
+
+  it("Work/Hidden -> Normal does not reconnect after a stale async result", async () => {
+    // Synchronous-ish: apply hidden, then normal. The hidden observer is torn
+    // down and must not be reconnected by a delayed getSettings() result.
+    await mod.syncRuntime(makeSettings({ preset: "work", sidebar: { mode: "hidden" } }));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(FakeMutationObserver.last!.disconnected).toBe(false);
+    await mod.syncRuntime(makeSettings({ preset: "normal", sidebar: { mode: "visible" } }));
+    await flushDebounce();
+    expect(FakeMutationObserver.last!.disconnected).toBe(true);
+  });
+
+  it("enabled -> disabled does not reconnect after a stale async result", async () => {
+    await mod.syncRuntime(makeSettings({ preset: "normal", sidebar: { mode: "hidden" } }));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(FakeMutationObserver.last!.disconnected).toBe(false);
+    await mod.syncRuntime(makeSettings({ preset: "normal", sidebar: { mode: "hidden" }, enabled: false }));
+    await flushDebounce();
+    expect(FakeMutationObserver.last!.disconnected).toBe(true);
+  });
+
+  it("active -> teardown does not reconnect after a stale async result", async () => {
+    await mod.syncRuntime(makeSettings({ preset: "normal", sidebar: { mode: "hidden" } }));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(FakeMutationObserver.last!.disconnected).toBe(false);
+    mod.teardown();
+    await flushDebounce();
+    expect(FakeMutationObserver.last!.disconnected).toBe(true);
+  });
+
+  // ---- Fix 5: selective transient clearing on storage changes ----
+
+  function fireStorageChange(next: Settings): Promise<void> {
+    setEnv(next);
+    const cbs = (mod as unknown as { __onChanged: ((c: Record<string, unknown>, a: string) => void)[] }).__onChanged;
+    for (const cb of cbs) cb({ settings: { newValue: { schemaVersion: 2, settings: next } } }, "local");
+    return new Promise((r) => setTimeout(r, 20));
+  }
+
+  it("Hidden temporarily open + theme change -> remains temporarily open", async () => {
+    const base = makeSettings({ preset: "normal", sidebar: { mode: "hidden" } });
+    await mod.syncRuntime(base);
+    await new Promise((r) => setTimeout(r, 0));
+    // Open temporarily via shortcut.
+    mod.handleKeydown(keyEvent(dom.window, { alt: true, shift: true }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(dom.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(false);
+    // Unrelated theme change should NOT clear the transient override.
+    const themed = makeSettings({ preset: "normal", sidebar: { mode: "hidden" } });
+    themed.theme.pageBackground = "#0a0a0a";
+    await fireStorageChange(themed);
+    expect(dom.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(false);
+  });
+
+  it("Visible temporarily closed + appearance change -> remains closed", async () => {
+    const base = makeSettings({ preset: "normal", sidebar: { mode: "visible" } });
+    await mod.syncRuntime(base);
+    await new Promise((r) => setTimeout(r, 0));
+    mod.handleKeydown(keyEvent(dom.window, { alt: true, shift: true }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(dom.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(true);
+    // Unrelated appearance change should NOT clear the transient override.
+    const appearance = makeSettings({ preset: "normal", sidebar: { mode: "visible" } });
+    appearance.appearance.useConversationWidth = true;
+    appearance.appearance.conversationWidth = 900;
+    await fireStorageChange(appearance);
+    expect(dom.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(true);
+  });
+
+  it("sidebar mode change -> transient cleared", async () => {
+    const base = makeSettings({ preset: "normal", sidebar: { mode: "hidden" } });
+    await mod.syncRuntime(base);
+    await new Promise((r) => setTimeout(r, 0));
+    mod.handleKeydown(keyEvent(dom.window, { alt: true, shift: true }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(dom.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(false);
+    // Mode change to visible clears transient; sidebar restored.
+    await fireStorageChange(makeSettings({ preset: "normal", sidebar: { mode: "visible" } }));
+    expect(dom.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(false);
+    expect(dom.window.document.querySelector('[data-cgl-sidebar-target]')).toBeNull();
+  });
+
+  it("extension disabled -> transient cleared and official UI restored", async () => {
+    const base = makeSettings({ preset: "normal", sidebar: { mode: "hidden" } });
+    await mod.syncRuntime(base);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(dom.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(true);
+    // Disable: transient cleared, marker removed, observer gone.
+    await fireStorageChange(makeSettings({ preset: "normal", sidebar: { mode: "hidden" }, enabled: false }));
+    expect(dom.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(false);
+    expect(dom.window.document.querySelector('[data-cgl-sidebar-target]')).toBeNull();
   });
 });

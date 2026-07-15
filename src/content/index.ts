@@ -4,7 +4,8 @@ import { ThemeApplier } from "./lifecycle.js";
 import { RouteListener } from "./route-listener.js";
 import { createAdapter } from "../adapters/chatgpt-adapter.js";
 import { debounce } from "../shared/debounce.js";
-import { hasRuntimeEffects } from "../features/sidebar/sidebar-state.js";
+import { hasAppearanceEffects } from "../features/appearance/presets.js";
+import { hasSidebarEffects } from "../features/sidebar/sidebar-state.js";
 import { SidebarController } from "../features/sidebar/sidebar-controller.js";
 import { SIDEBAR_HOST_ID } from "../features/sidebar/sidebar-detection.js";
 import { logger } from "../shared/logger.js";
@@ -41,6 +42,33 @@ const routeListener = new RouteListener();
 let observer: MutationObserver | null = null;
 let observedTarget: Node | null = null;
 
+/** Runtime enabled flag (Fix 2): keyboard shortcut is gated on this. */
+let runtimeEnabled = false;
+/** Whether the keydown listener is currently attached (Fix 2, no dup). */
+let keyboardListenerAttached = false;
+/**
+ * Observer epoch (Fix 4): every disconnect bumps it. A pending async reconnect
+ * from a mutation callback carries the epoch it was issued under; if the epoch
+ * changed (teardown / mode change / disabled), the stale reconnect is ignored.
+ */
+let observerEpoch = 0;
+
+/** Previously applied settings, used to reconcile the observer after a transient toggle. */
+let lastSettings: Settings | null = null;
+
+/**
+ * Effective runtime observation requirement (Fix 3): appearance effects, a
+ * non-visible persisted mode, OR an active transient sidebar effect (e.g. a
+ * Visible-mode temporary hide) all require the structural observer.
+ */
+function hasRuntimeEffects(settings: Settings): boolean {
+  return (
+    hasAppearanceEffects(settings) ||
+    hasSidebarEffects(settings) ||
+    sidebarController.hasTransientSidebarEffect()
+  );
+}
+
 /**
  * Single coalesced refresh operation. The MutationObserver callback schedules
  * this (never a full storage read + rescan per mutation batch), so a burst of
@@ -58,16 +86,45 @@ const scheduleMarkerRefresh = debounce((): void => {
 function syncRuntime(settings: Settings): void {
   applier.apply(settings);
   sidebarController.apply(settings);
+
+  // Fix 2: reflect enabled state and attach/detach the shortcut listener.
+  runtimeEnabled = settings.enabled;
+  if (settings.enabled && !keyboardListenerAttached) {
+    document.addEventListener("keydown", handleKeydown);
+    keyboardListenerAttached = true;
+  } else if (!settings.enabled && keyboardListenerAttached) {
+    document.removeEventListener("keydown", handleKeydown);
+    keyboardListenerAttached = false;
+  }
+
+  // Fix 3+4: synchronous connect/disconnect from validated settings.
   if (settings.enabled && hasRuntimeEffects(settings)) {
-    connectObserver();
+    connectObserver(settings);
   } else {
     disconnectObserver();
   }
+
+  lastSettings = settings;
 }
 
 /** Apply current settings; used on bootstrap, storage change, and route change. */
 function applyCurrent(): void {
   void getSettings().then(syncRuntime);
+}
+
+/**
+ * Reconcile the structural observer against the last applied settings plus the
+ * controller's current transient state. Used after a transient keyboard toggle
+ * so a freshly hidden/closed sidebar becomes observed immediately, and a
+ * restored one is disconnected when no other effect remains.
+ */
+function reconcileObserver(): void {
+  if (!lastSettings) return;
+  if (runtimeEnabled && hasRuntimeEffects(lastSettings)) {
+    connectObserver(lastSettings);
+  } else {
+    disconnectObserver();
+  }
 }
 
 /** Whether a node is the extension-owned sidebar control host (ignore it). */
@@ -91,7 +148,7 @@ function isExtensionHost(node: Node): boolean {
  */
 function pickObserverTarget(settings: Settings): Node {
   const conv = adapter.detectConversationContainer().element;
-  if (!hasSidebarEffectsLocal(settings)) {
+  if (!hasSidebarEffects(settings) && !sidebarController.hasTransientSidebarEffect()) {
     return conv ?? document.body;
   }
   const sidebar = adapter.detectSidebar().element;
@@ -106,10 +163,6 @@ function pickObserverTarget(settings: Settings): Node {
     }
   }
   return document.body;
-}
-
-function hasSidebarEffectsLocal(settings: Settings): boolean {
-  return settings.sidebar.mode !== "visible";
 }
 
 /** Lowest common ancestor of two elements, or null. */
@@ -129,41 +182,48 @@ function lowestCommonAncestor(a: Node, b: Node): Node | null {
   return null;
 }
 
-/** Attach a scoped observer to the narrowest available stable root. */
-function connectObserver(): void {
-  void getSettings().then((settings) => {
-    const target = pickObserverTarget(settings);
-    if (observedTarget === target && observer) return; // already observing
-    if (observer) observer.disconnect();
-    observer = new MutationObserver((mutations) => {
-      let added = false;
-      for (const m of mutations) {
-        for (const node of Array.from(m.addedNodes)) {
-          if (node.nodeType === Node.ELEMENT_NODE && !isExtensionHost(node)) {
-            added = true;
-            break;
-          }
+/**
+ * Synchronously attach (or reuse) the scoped observer to the narrowest stable
+ * root for the given validated settings (Fix 4: no async fetch in the initial
+ * path). Reconnect idempotently when the target changes.
+ */
+function connectObserver(settings: Settings): void {
+  const target = pickObserverTarget(settings);
+  if (observedTarget === target && observer) return; // already observing
+  if (observer) observer.disconnect();
+  const epoch = observerEpoch;
+  observer = new MutationObserver((mutations) => {
+    let added = false;
+    for (const m of mutations) {
+      for (const node of Array.from(m.addedNodes)) {
+        if (node.nodeType === Node.ELEMENT_NODE && !isExtensionHost(node)) {
+          added = true;
+          break;
         }
-        if (added) break;
       }
-      if (!added) return;
-      // Cheap path: re-check route signature on structural changes.
-      routeListener.check();
-      // Reconnect to a narrower root if one just became available.
-      void getSettings().then((s) => {
-        const narrower = pickObserverTarget(s);
-        if (narrower && narrower !== observedTarget) connectObserver();
-      });
-      // Coalesce refresh into one debounced operation.
-      scheduleMarkerRefresh();
+      if (added) break;
+    }
+    if (!added) return;
+    // Cheap path: re-check route signature on structural changes.
+    routeListener.check();
+    // Reconnect to a narrower root if one just became available (Fix 4: guard
+    // against a stale async result reconnecting after teardown/mode change).
+    void getSettings().then((s) => {
+      if (observerEpoch !== epoch) return; // superseded / torn down
+      if (!s.enabled || !hasRuntimeEffects(s)) return; // effect gone
+      const narrower = pickObserverTarget(s);
+      if (narrower && narrower !== observedTarget) connectObserver(s);
     });
-    observedTarget = target;
-    observer.observe(target, { childList: true, subtree: true });
+    // Coalesce refresh into one debounced operation.
+    scheduleMarkerRefresh();
   });
+  observedTarget = target;
+  observer.observe(target, { childList: true, subtree: true });
 }
 
-/** Disconnect the active observer (Normal / disabled). Idempotent. */
+/** Disconnect the active observer and bump the epoch (Fix 4). Idempotent. */
 function disconnectObserver(): void {
+  observerEpoch++;
   if (observer) {
     observer.disconnect();
     observer = null;
@@ -176,6 +236,12 @@ function teardown(): void {
   // Cancel any pending debounced refresh so it cannot re-mark the DOM after
   // teardown.
   scheduleMarkerRefresh.cancel();
+  // Fix 2: remove the shortcut listener.
+  if (keyboardListenerAttached) {
+    document.removeEventListener("keydown", handleKeydown);
+    keyboardListenerAttached = false;
+  }
+  runtimeEnabled = false;
   disconnectObserver();
   sidebarController.teardown();
   applier.restore();
@@ -189,11 +255,22 @@ function reapplyAfterRouteChange(): void {
   applyCurrent();
 }
 
-/** Global keydown handler for the fixed `Alt+Shift+L` sidebar shortcut. */
+/**
+ * Global keydown handler for the fixed `Alt+Shift+L` sidebar shortcut.
+ *
+ * Order of checks (Fix 2): enabled -> not repeat -> not composing -> non-
+ * editable origin -> exact modifiers + KeyL -> preventDefault -> toggle. No
+ * storage read is performed merely to determine whether the extension is
+ * enabled; the synchronous `runtimeEnabled` flag is used instead.
+ */
 function handleKeydown(e: KeyboardEvent): void {
-  // Ignore repeats and composition events.
-  if (e.repeat || e.isComposing || e.key === "Process") return;
-  // Ignore events originating inside editable fields.
+  // 1. enabled
+  if (!runtimeEnabled) return;
+  // 2. ignore repeats
+  if (e.repeat) return;
+  // 3. ignore composition
+  if (e.isComposing || e.key === "Process") return;
+  // 4. ignore editable origins
   const t = e.target as Element | null;
   if (t) {
     const tag = t.tagName?.toLowerCase();
@@ -207,7 +284,7 @@ function handleKeydown(e: KeyboardEvent): void {
       return;
     }
   }
-  // Exact modifier match: Alt+Shift+KeyL, no Ctrl/Meta.
+  // 5. exact modifier match: Alt+Shift+KeyL, no Ctrl/Meta.
   const match =
     e.altKey &&
     e.shiftKey &&
@@ -215,17 +292,19 @@ function handleKeydown(e: KeyboardEvent): void {
     !e.metaKey &&
     e.code === "KeyL";
   if (!match) return;
+  // 6. prevent default only after an exact valid match.
   e.preventDefault();
-  void getSettings().then((settings) => {
-    if (!settings.enabled) return;
-    sidebarController.onKeyboardToggle();
-  });
+  // 7. toggle sidebar transient state.
+  sidebarController.onKeyboardToggle();
+  // Fix 3: after the transient toggle (Alt+Shift+L), re-evaluate whether the
+  // structural observer is required and connect/disconnect accordingly. This
+  // runs synchronously so a freshly hidden/closed sidebar is observed at once.
+  reconcileObserver();
 }
 
 async function bootstrap(): Promise<void> {
   const settings = await getSettings();
   syncRuntime(settings);
-
   routeListener.onChange(() => {
     reapplyAfterRouteChange();
   });
@@ -235,17 +314,17 @@ async function bootstrap(): Promise<void> {
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area !== "local") return;
       if (!("settings" in changes)) return;
-      // Reload through the validated path rather than trusting a raw cast of
-      // changes.settings.newValue. A mode change clears transient state.
       void getSettings().then((s) => {
-        sidebarController.clearTransient();
+        // Fix 5: clear transient state only for relevant changes.
+        const prev = lastSettings;
+        const modeChanged = !!prev && s.sidebar.mode !== prev.sidebar.mode;
+        const disabled = !!prev && prev.enabled && !s.enabled;
+        if (modeChanged || disabled) {
+          sidebarController.clearTransient();
+        }
         syncRuntime(s);
       });
     });
-  }
-
-  if (typeof document !== "undefined") {
-    document.addEventListener("keydown", handleKeydown);
   }
 
   logger.info("content", "Lite UI content script active", {});
@@ -265,6 +344,7 @@ export {
   scheduleMarkerRefresh,
   pickObserverTarget,
   handleKeydown,
+  hasRuntimeEffects,
 };
 
 if (typeof document !== "undefined") {

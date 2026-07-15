@@ -105,7 +105,7 @@ describe("Scoped mutation observer + route lifecycle (Fix 1/2)", () => {
     mod.routeListener.onChange(() => {
       onChangeCalls++;
     });
-    mod.connectObserver();
+    mod.connectObserver(makeSettings());
   });
 
   afterEach(() => {

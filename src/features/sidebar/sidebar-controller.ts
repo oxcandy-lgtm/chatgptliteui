@@ -48,8 +48,10 @@ export class SidebarController {
 
   private hoverCloseTimer: ReturnType<typeof setTimeout> | null = null;
   /** Bound handlers retained so they can be removed on teardown. */
-  private sidebarEnterHandler: (() => void) | null = null;
-  private sidebarLeaveHandler: (() => void) | null = null;
+  private sidebarPointerEnterHandler: (() => void) | null = null;
+  private sidebarPointerLeaveHandler: (() => void) | null = null;
+  private sidebarFocusInHandler: ((e: FocusEvent) => void) | null = null;
+  private sidebarFocusOutHandler: ((e: FocusEvent) => void) | null = null;
 
   constructor(root: HTMLElement, adapter: ChatGptAdapter) {
     this.root = root;
@@ -75,6 +77,20 @@ export class SidebarController {
     return this.host.isMounted;
   }
 
+  /**
+   * Fix 3: whether a transient sidebar effect is currently active (e.g. a
+   * Visible-mode temporary hide via `temporaryOverride = "closed"`, or a
+   * Hidden-mode temporary show). Used by the runtime to decide whether the
+   * structural observer must stay attached even when the persisted mode alone
+   * would not require it.
+   */
+  hasTransientSidebarEffect(): boolean {
+    return (
+      (this.configuredMode === "visible" && this.transient.temporaryOverride === "closed") ||
+      (this.configuredMode === "hidden" && this.transient.temporaryOverride === "open")
+    );
+  }
+
   // --- apply / restore -----------------------------------------------------
 
   /**
@@ -92,8 +108,9 @@ export class SidebarController {
       this.detectedSidebar = null;
       return;
     }
-    if (this.configuredMode === "visible" && this.transient.temporaryOverride === "none") {
-      // Official sidebar preserved exactly; no class, marker, or host.
+    // Official sidebar preserved exactly only when visible AND no transient
+    // effect (Fix 3: a Visible-mode temporary hide must still bind/mark).
+    if (this.configuredMode === "visible" && !this.hasTransientSidebarEffect()) {
       this.detectedSidebar = null;
       return;
     }
@@ -104,7 +121,7 @@ export class SidebarController {
   /** Re-detect and rebind after SPA route change or structural mutation. */
   refresh(_settings: Settings): void {
     if (!this.enabled) return;
-    if (this.configuredMode === "visible" && this.transient.temporaryOverride === "none") {
+    if (this.configuredMode === "visible" && !this.hasTransientSidebarEffect()) {
       return;
     }
     // Preserve transient override; only refresh detection + markers + host.
@@ -168,6 +185,10 @@ export class SidebarController {
 
   // --- pointer / focus (hover) ---------------------------------------------
 
+  // Pointer and focus are tracked separately (Fix 1): pointer entry never
+  // touches focusWithin, and focus leaving the sidebar only closes when focus
+  // has truly left the entire sidebar (not when moving between descendants).
+
   private onRailEnter(): void {
     if (this.configuredMode !== "hover") return;
     this.clearHoverCloseTimer();
@@ -177,14 +198,52 @@ export class SidebarController {
 
   private onRailLeave(): void {
     if (this.configuredMode !== "hover") return;
+    this.transient.hoverActive = false;
+    this.scheduleHoverClose();
+  }
+
+  private onSidebarPointerEnter(): void {
+    if (this.configuredMode !== "hover") return;
+    this.clearHoverCloseTimer();
+    this.transient.hoverActive = true;
+    this.updateClosedClass();
+  }
+
+  private onSidebarPointerLeave(): void {
+    if (this.configuredMode !== "hover") return;
+    this.transient.hoverActive = false;
+    this.scheduleHoverClose();
+  }
+
+  private onSidebarFocusIn(): void {
+    if (this.configuredMode !== "hover") return;
+    this.clearHoverCloseTimer();
+    this.transient.focusWithin = true;
+    this.updateClosedClass();
+  }
+
+  private onSidebarFocusOut(e: FocusEvent): void {
+    if (this.configuredMode !== "hover") return;
+    // If focus moved to another descendant of the sidebar, stay open.
+    const related = e.relatedTarget;
+    if (related instanceof Node && this.detectedSidebar && this.detectedSidebar.contains(related)) {
+      return;
+    }
+    this.transient.focusWithin = false;
     this.scheduleHoverClose();
   }
 
   private scheduleHoverClose(): void {
     this.clearHoverCloseTimer();
     this.hoverCloseTimer = setTimeout(() => {
-      this.transient.hoverActive = false;
-      this.updateClosedClass();
+      if (
+        !this.transient.hoverActive &&
+        !this.transient.focusWithin &&
+        this.transient.temporaryOverride !== "open"
+      ) {
+        this.transient.hoverActive = false;
+        this.updateClosedClass();
+      }
     }, HOVER_CLOSE_MS);
   }
 
@@ -197,36 +256,38 @@ export class SidebarController {
 
   private attachSidebarListeners(target: HTMLElement): void {
     this.detachSidebarListeners();
-    this.sidebarEnterHandler = () => this.onSidebarEnter();
-    this.sidebarLeaveHandler = () => this.onSidebarLeave();
-    target.addEventListener("pointerenter", this.sidebarEnterHandler);
-    target.addEventListener("pointerleave", this.sidebarLeaveHandler);
-    target.addEventListener("focusin", this.sidebarEnterHandler);
-    target.addEventListener("focusout", this.sidebarLeaveHandler);
+    const onEnter = (): void => this.onSidebarPointerEnter();
+    const onLeave = (): void => this.onSidebarPointerLeave();
+    const onFocusIn = (): void => this.onSidebarFocusIn();
+    const onFocusOut = (e: FocusEvent): void => this.onSidebarFocusOut(e);
+    this.sidebarPointerEnterHandler = onEnter;
+    this.sidebarPointerLeaveHandler = onLeave;
+    this.sidebarFocusInHandler = onFocusIn;
+    this.sidebarFocusOutHandler = onFocusOut;
+    target.addEventListener("pointerenter", onEnter);
+    target.addEventListener("pointerleave", onLeave);
+    target.addEventListener("focusin", onFocusIn);
+    target.addEventListener("focusout", onFocusOut);
   }
 
   private detachSidebarListeners(): void {
-    if (this.detectedSidebar && this.sidebarEnterHandler && this.sidebarLeaveHandler) {
-      this.detectedSidebar.removeEventListener("pointerenter", this.sidebarEnterHandler);
-      this.detectedSidebar.removeEventListener("pointerleave", this.sidebarLeaveHandler);
-      this.detectedSidebar.removeEventListener("focusin", this.sidebarEnterHandler);
-      this.detectedSidebar.removeEventListener("focusout", this.sidebarLeaveHandler);
+    if (!this.detectedSidebar) return;
+    if (this.sidebarPointerEnterHandler) {
+      this.detectedSidebar.removeEventListener("pointerenter", this.sidebarPointerEnterHandler);
     }
-    this.sidebarEnterHandler = null;
-    this.sidebarLeaveHandler = null;
-  }
-
-  private onSidebarEnter(): void {
-    if (this.configuredMode !== "hover") return;
-    this.clearHoverCloseTimer();
-    this.transient.hoverActive = true;
-    this.transient.focusWithin = true;
-    this.updateClosedClass();
-  }
-
-  private onSidebarLeave(): void {
-    if (this.configuredMode !== "hover") return;
-    this.scheduleHoverClose();
+    if (this.sidebarPointerLeaveHandler) {
+      this.detectedSidebar.removeEventListener("pointerleave", this.sidebarPointerLeaveHandler);
+    }
+    if (this.sidebarFocusInHandler) {
+      this.detectedSidebar.removeEventListener("focusin", this.sidebarFocusInHandler);
+    }
+    if (this.sidebarFocusOutHandler) {
+      this.detectedSidebar.removeEventListener("focusout", this.sidebarFocusOutHandler);
+    }
+    this.sidebarPointerEnterHandler = null;
+    this.sidebarPointerLeaveHandler = null;
+    this.sidebarFocusInHandler = null;
+    this.sidebarFocusOutHandler = null;
   }
 
   // --- button --------------------------------------------------------------
