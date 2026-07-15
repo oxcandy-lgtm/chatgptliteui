@@ -121,10 +121,24 @@ export class SidebarController {
   /** Re-detect and rebind after SPA route change or structural mutation. */
   refresh(_settings: Settings): void {
     if (!this.enabled) return;
-    if (this.configuredMode === "visible" && !this.hasTransientSidebarEffect()) {
+    this.reconcileBinding();
+  }
+
+  /**
+   * Single binding reconciliation path. Decides between full restoration
+   * (official UI untouched) and target binding based on the current configured
+   * mode + transient state. Used after keyboard state transitions and anywhere
+   * runtime state may move between a bound target and the official UI.
+   */
+  private reconcileBinding(): void {
+    if (
+      !this.enabled ||
+      (this.configuredMode === "visible" &&
+        !this.hasTransientSidebarEffect())
+    ) {
+      this.restore();
       return;
     }
-    // Preserve transient override; only refresh detection + markers + host.
     this.bindTarget();
   }
 
@@ -332,11 +346,19 @@ export class SidebarController {
         this.transient.buttonOpen = !this.transient.buttonOpen;
         this.host.setButtonExpanded(this.transient.buttonOpen);
         break;
-      case "hover":
-        this.transient.hoverActive = !this.transient.hoverActive;
+      case "hover": {
+        // Keyboard toggle is a pinned override, independent of pointer/focus
+        // physical state. Pin closed when currently open (by any means), else
+        // pin open. The override takes priority in effectiveSidebarOpen.
+        const currentlyOpen = effectiveSidebarOpen(
+          this.configuredMode,
+          this.transient,
+        );
+        this.transient.temporaryOverride = currentlyOpen ? "closed" : "open";
         break;
+      }
     }
-    this.bindTarget();
+    this.reconcileBinding();
   }
 
   // --- mode change / teardown ----------------------------------------------

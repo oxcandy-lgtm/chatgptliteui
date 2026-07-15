@@ -63,19 +63,18 @@ export function effectiveSidebarOpen(
   mode: SidebarMode,
   transient: SidebarTransientState,
 ): boolean {
+  // An explicit keyboard pin overrides physical pointer/focus state.
+  if (transient.temporaryOverride === "open") return true;
+  if (transient.temporaryOverride === "closed") return false;
   switch (mode) {
     case "visible":
-      return transient.temporaryOverride !== "closed";
+      return true;
     case "hidden":
-      return transient.temporaryOverride === "open";
+      return false;
     case "button":
-      return transient.buttonOpen || transient.temporaryOverride === "open";
+      return transient.buttonOpen;
     case "hover":
-      return (
-        transient.hoverActive ||
-        transient.focusWithin ||
-        transient.temporaryOverride === "open"
-      );
+      return transient.hoverActive || transient.focusWithin;
   }
 }
 

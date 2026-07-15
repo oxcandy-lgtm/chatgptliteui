@@ -409,6 +409,181 @@ describe("sidebar modes (non-destructive behavior)", () => {
   });
 });
 
+describe("Phase 3 transient-state and safe-observation fixes", () => {
+  let d: JSDOM;
+  let controller: SidebarController;
+  let adapter: ChatGptAdapter;
+
+  function sidebarEl(): HTMLElement {
+    return d.window.document.querySelector('[data-testid="sidebar"]') as HTMLElement;
+  }
+  function railEl(): HTMLElement | null {
+    const host = d.window.document.getElementById("cgl-sidebar-control-host");
+    return host ? (host.shadowRoot!.querySelector(".cgl-rail") as HTMLElement) : null;
+  }
+  function fire(el: HTMLElement, type: string): void {
+    el.dispatchEvent(new d.window.Event(type));
+  }
+  function markerCount(): number {
+    return d.window.document.querySelectorAll('[data-cgl-sidebar-target]').length;
+  }
+
+  beforeEach(() => {
+    d = installDom(sidebarFixture());
+    const aside = d.window.document.querySelector('[data-testid="sidebar"]') as HTMLElement;
+    const main = d.window.document.querySelector('[role="main"]') as HTMLElement;
+    adapter = new StubAdapter({
+      sidebar: det({ found: true, confidence: "medium", element: aside, elements: [aside] }),
+      container: det({ found: true, confidence: "high", element: main, elements: [main] }),
+    }) as unknown as ChatGptAdapter;
+    controller = new SidebarController(d.window.document.documentElement, adapter);
+  });
+  afterEach(() => {
+    controller.teardown();
+    const g = globalThis as unknown as Record<string, unknown>;
+    delete g.window;
+    delete g.document;
+  });
+
+  // ---- Fix 1: Visible full restoration after clearing temporary override ----
+
+  it("Visible shortcut hide then restore removes marker, listeners, host", () => {
+    controller.apply(settings("visible"));
+    expect(markerCount()).toBe(0);
+    expect(controller.isHostMounted).toBe(false);
+
+    controller.onKeyboardToggle(); // hide
+    expect(d.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(true);
+    expect(markerCount()).toBe(1);
+    expect(controller.target).not.toBeNull();
+
+    controller.onKeyboardToggle(); // restore
+    expect(d.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(false);
+    expect(markerCount()).toBe(0);
+    expect(controller.target).toBeNull();
+    expect(controller.isHostMounted).toBe(false);
+  });
+
+  it("Visible shortcut restore removes sidebar listeners (no effect on ChatGPT)", () => {
+    const aside = sidebarEl();
+    const beforeClasses = Array.from(aside.classList);
+    controller.apply(settings("visible"));
+    controller.onKeyboardToggle(); // hide (binds + attaches listeners)
+    controller.onKeyboardToggle(); // restore (removes listeners + marker)
+    // Distinct listener removal: dispatching events no longer drives state.
+    fire(aside, "pointerenter");
+    fire(aside, "focusin");
+    fire(aside, "pointerleave");
+    fire(aside, "focusout");
+    expect(d.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(false);
+    expect(markerCount()).toBe(0);
+    expect(controller.target).toBeNull();
+    // No ChatGPT class mutation.
+    expect(Array.from(aside.classList)).toEqual(beforeClasses);
+  });
+
+  it("Visible shortcut restore leaves ChatGPT inline styles unchanged", () => {
+    const aside = sidebarEl();
+    const beforeStyle = aside.getAttribute("style");
+    controller.apply(settings("visible"));
+    controller.onKeyboardToggle();
+    controller.onKeyboardToggle();
+    // The extension must not add/alter inline styles on the ChatGPT sidebar.
+    expect(aside.getAttribute("style")).toBe(beforeStyle);
+  });
+
+  it("repeated Visible hide/restore cycles leak no marker, host, or listener", () => {
+    controller.apply(settings("visible"));
+    for (let i = 0; i < 3; i++) {
+      controller.onKeyboardToggle(); // hide
+      expect(markerCount()).toBe(1);
+      expect(d.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(true);
+      controller.onKeyboardToggle(); // restore
+      expect(markerCount()).toBe(0);
+      expect(d.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(false);
+      expect(controller.target).toBeNull();
+      expect(controller.isHostMounted).toBe(false);
+    }
+  });
+
+  // ---- Fix 2: Hover keyboard toggle is a pinned temporary override ----
+
+  it("closed Hover -> shortcut pins open and stays open after pointer leave", () => {
+    controller.apply(settings("hover"));
+    const rail = railEl()!;
+    // Start closed (no pointer). Pin open via shortcut.
+    controller.onKeyboardToggle();
+    expect(d.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(false);
+    expect(controller.transientState.temporaryOverride).toBe("open");
+    // Pointer leaves the rail: must NOT cancel the pinned-open state.
+    fire(rail, "pointerleave");
+    expect(d.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(false);
+    // Next shortcut reverses the pin (closes).
+    controller.onKeyboardToggle();
+    expect(controller.transientState.temporaryOverride).toBe("closed");
+    expect(d.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(true);
+  });
+
+  it("pointer enter/leave does not clear a pinned-open Hover", () => {
+    controller.apply(settings("hover"));
+    const sb = sidebarEl();
+    const rail = railEl()!;
+    controller.onKeyboardToggle(); // pin open
+    fire(sb, "pointerenter");
+    fire(rail, "pointerleave");
+    fire(sb, "pointerleave");
+    expect(controller.transientState.temporaryOverride).toBe("open");
+    expect(d.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(false);
+  });
+
+  it("focus inside Hover -> shortcut pins closed despite focusWithin", () => {
+    controller.apply(settings("hover"));
+    const sb = sidebarEl();
+    fire(sb, "focusin"); // focus within -> open by physical state
+    expect(d.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(false);
+    fire(sb, "pointerenter");
+    controller.onKeyboardToggle(); // currently open -> pin closed
+    expect(controller.transientState.temporaryOverride).toBe("closed");
+    expect(d.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(true);
+    // Pointer/focus activity cannot reopen a pinned-closed Hover.
+    fire(sb, "pointerenter");
+    fire(sb, "focusin");
+    expect(d.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(true);
+    // Next shortcut opens it again.
+    controller.onKeyboardToggle();
+    expect(controller.transientState.temporaryOverride).toBe("open");
+    expect(d.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(false);
+  });
+
+  it("keyboard can close Hover while focus is inside the sidebar", () => {
+    controller.apply(settings("hover"));
+    const sb = sidebarEl();
+    fire(sb, "focusin");
+    controller.onKeyboardToggle(); // pin closed
+    expect(controller.transientState.temporaryOverride).toBe("closed");
+    expect(d.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(true);
+  });
+
+  it("Hover keyboard pin clears on mode change", () => {
+    controller.apply(settings("hover"));
+    controller.onKeyboardToggle(); // pin open
+    expect(controller.transientState.temporaryOverride).toBe("open");
+    controller.clearTransient();
+    controller.apply(settings("visible"));
+    expect(controller.transientState.temporaryOverride).toBe("none");
+    expect(d.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(false);
+  });
+
+  it("Hover pinned-closed remains closed while pointer is over the rail", () => {
+    controller.apply(settings("hover"));
+    controller.onKeyboardToggle(); // pin open
+    controller.onKeyboardToggle(); // pin closed
+    const rail = railEl()!;
+    fire(rail, "pointerenter"); // pointer over rail must not reopen
+    expect(d.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(true);
+  });
+});
+
 describe("sidebar restoration", () => {
   let d: JSDOM;
   let controller: SidebarController;

@@ -7,7 +7,7 @@ import { debounce } from "../shared/debounce.js";
 import { hasAppearanceEffects } from "../features/appearance/presets.js";
 import { hasSidebarEffects } from "../features/sidebar/sidebar-state.js";
 import { SidebarController } from "../features/sidebar/sidebar-controller.js";
-import { SIDEBAR_HOST_ID } from "../features/sidebar/sidebar-detection.js";
+import { findSafeSidebarTarget, SIDEBAR_HOST_ID } from "../features/sidebar/sidebar-detection.js";
 import { logger } from "../shared/logger.js";
 
 /**
@@ -151,17 +151,25 @@ function pickObserverTarget(settings: Settings): Node {
   if (!hasSidebarEffects(settings) && !sidebarController.hasTransientSidebarEffect()) {
     return conv ?? document.body;
   }
-  const sidebar = adapter.detectSidebar().element;
-  if (conv && sidebar) {
-    const lca = lowestCommonAncestor(conv, sidebar);
+  // Fix 3: use ONLY a target that passed the Phase 3 safety gate and
+  // normalization — never the raw adapter candidate. The controller's detected
+  // target (already gated) is preferred; otherwise fall back to a fresh safe
+  // detection. An unsafe raw candidate is never used to narrow the observer.
+  const safeSidebar =
+    sidebarController.target ?? findSafeSidebarTarget(adapter);
+  if (conv && safeSidebar) {
+    const lca = lowestCommonAncestor(conv, safeSidebar);
     if (lca && lca !== document.documentElement) return lca;
   }
-  if (sidebar) {
-    const parent = sidebar.parentElement;
+  if (safeSidebar) {
+    const parent = safeSidebar.parentElement;
     if (parent && parent !== document.body && parent !== document.documentElement) {
       return parent;
     }
   }
+  // No safe sidebar yet: observe document.body (or another demonstrably safe
+  // app-shell root) broadly enough to detect a later valid sidebar, then
+  // reconnect to the narrower safe root once it appears.
   return document.body;
 }
 
@@ -208,12 +216,19 @@ function connectObserver(settings: Settings): void {
     routeListener.check();
     // Reconnect to a narrower root if one just became available (Fix 4: guard
     // against a stale async result reconnecting after teardown/mode change).
-    void getSettings().then((s) => {
+    // Use the already-validated current settings (lastSettings) for the
+    // narrowing decision rather than re-reading storage, which may resolve to
+    // a stale snapshot and skip the reconnect.
+    const s = lastSettings;
+    if (s) {
       if (observerEpoch !== epoch) return; // superseded / torn down
       if (!s.enabled || !hasRuntimeEffects(s)) return; // effect gone
+      // Re-detect with current DOM before narrowing (a safe sidebar may have
+      // just appeared or moved), so the observer adopts the narrower safe root.
+      sidebarController.refresh(s);
       const narrower = pickObserverTarget(s);
       if (narrower && narrower !== observedTarget) connectObserver(s);
-    });
+    }
     // Coalesce refresh into one debounced operation.
     scheduleMarkerRefresh();
   });

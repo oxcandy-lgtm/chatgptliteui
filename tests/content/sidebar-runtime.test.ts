@@ -497,4 +497,70 @@ describe("sidebar content runtime + keyboard", () => {
     expect(dom.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(false);
     expect(dom.window.document.querySelector('[data-cgl-sidebar-target]')).toBeNull();
   });
+
+  // ---- Fix 3: observer roots come only from a safe sidebar target ----
+
+  function moveAsideInto(parent: Element): HTMLElement {
+    const aside = dom.window.document.querySelector('[data-testid="sidebar"]') as HTMLElement;
+    parent.appendChild(aside);
+    return aside;
+  }
+
+  it("unsafe sidebar candidate inside main is rejected; observer stays on body", async () => {
+    moveAsideInto(dom.window.document.querySelector("main")!);
+    await mod.syncRuntime(makeSettings({ preset: "normal", sidebar: { mode: "hidden" } }));
+    await new Promise((r) => setTimeout(r, 0));
+    // pickObserverTarget must NOT narrow around the raw (unsafe) candidate.
+    expect(FakeMutationObserver.last!.target).toBe(dom.window.document.body);
+  });
+
+  it("dialog-contained sidebar candidate is also rejected; observer stays on body", async () => {
+    const dialog = dom.window.document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    dom.window.document.getElementById("app")!.appendChild(dialog);
+    moveAsideInto(dialog);
+    await mod.syncRuntime(makeSettings({ preset: "normal", sidebar: { mode: "hidden" } }));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(FakeMutationObserver.last!.target).toBe(dom.window.document.body);
+  });
+
+  it("valid sidebar later added outside main is observed and adopted (narrows)", async () => {
+    // Start unsafe (inside main) -> observer on body.
+    moveAsideInto(dom.window.document.querySelector("main")!);
+    await mod.syncRuntime(makeSettings({ preset: "normal", sidebar: { mode: "hidden" } }));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(FakeMutationObserver.last!.target).toBe(dom.window.document.body);
+
+    // Move the aside outside main (now safe) and trigger a structural change
+    // with the actually-added node.
+    const app = dom.window.document.getElementById("app")!;
+    const moved = dom.window.document.querySelector('[data-testid="sidebar"]') as HTMLElement;
+    app.appendChild(moved);
+    FakeMutationObserver.last!.trigger([moved]);
+    await flushDebounce();
+
+    // Observer reconnects to the narrower safe app root, not body.
+    expect(FakeMutationObserver.last!.target).not.toBe(dom.window.document.body);
+    expect(FakeMutationObserver.last!.target).toBe(app);
+  });
+
+  it("no duplicate observer is created during safe-root recovery", async () => {
+    moveAsideInto(dom.window.document.querySelector("main")!);
+    await mod.syncRuntime(makeSettings({ preset: "normal", sidebar: { mode: "hidden" } }));
+    await new Promise((r) => setTimeout(r, 0));
+    const first = FakeMutationObserver.last!;
+
+    const app = dom.window.document.getElementById("app")!;
+    const moved = dom.window.document.querySelector('[data-testid="sidebar"]') as HTMLElement;
+    app.appendChild(moved);
+    FakeMutationObserver.last!.trigger([moved]);
+    await flushDebounce();
+    const second = FakeMutationObserver.last!;
+
+    // The first (body) observer must be disconnected before the narrower one
+    // is adopted; exactly one active observer at the end.
+    expect(first.disconnected).toBe(true);
+    expect(second.disconnected).toBe(false);
+    expect(second.target).toBe(app);
+  });
 });
