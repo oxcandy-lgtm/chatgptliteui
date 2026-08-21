@@ -1,61 +1,65 @@
-
-
-const STORAGE_KEY = "cgl:writingCopy:copiedHistory";
+const STORAGE_PREFIX = "cgl:writingCopy:history:";
 
 export interface CopiedRecord {
-  conversationId: string;
   turnIndex: number;
   blockIndex: number;
   fingerprint: string;
   copiedAt: number;
 }
 
-export interface CopiedHistory {
-  [conversationId: string]: CopiedRecord[];
+function storageKey(conversationFingerprint: string) {
+  return `${STORAGE_PREFIX}${conversationFingerprint}`;
 }
 
-export async function getCopiedHistory(): Promise<CopiedHistory> {
-  if (typeof chrome === "undefined" || !chrome.storage?.local) return {};
+export async function getCopiedRecords(conversationFingerprint: string): Promise<CopiedRecord[]> {
+  if (typeof chrome === "undefined" || !chrome.storage?.local) return [];
   try {
-    const raw = await chrome.storage.local.get(STORAGE_KEY);
-    const data = raw[STORAGE_KEY] as CopiedHistory | undefined;
-    return data && typeof data === "object" ? data : {};
+    const raw = await chrome.storage.local.get(storageKey(conversationFingerprint));
+    const data = raw[storageKey(conversationFingerprint)] as CopiedRecord[] | undefined;
+    if (!Array.isArray(data)) return [];
+    return data.filter(r =>
+      typeof r.turnIndex === "number" &&
+      typeof r.blockIndex === "number" &&
+      typeof r.fingerprint === "string" &&
+      typeof r.copiedAt === "number"
+    );
   } catch {
-    return {};
+    return [];
   }
 }
 
-export async function saveCopiedRecord(record: CopiedRecord): Promise<void> {
+export async function saveCopiedRecord(conversationFingerprint: string, record: CopiedRecord): Promise<void> {
   if (typeof chrome === "undefined" || !chrome.storage?.local) return;
   try {
-    const history = await getCopiedHistory();
-    const list = history[record.conversationId] ?? [];
-    // Replace existing record with same position
+    const list = await getCopiedRecords(conversationFingerprint);
     const idx = list.findIndex(r => r.turnIndex === record.turnIndex && r.blockIndex === record.blockIndex);
     if (idx >= 0) {
       list[idx] = record;
     } else {
       list.push(record);
     }
-    history[record.conversationId] = list;
-    await chrome.storage.local.set({ [STORAGE_KEY]: history });
-  } catch {
-    // ignore storage errors
-  }
-}
-
-export async function clearCopiedHistory(): Promise<void> {
-  if (typeof chrome === "undefined" || !chrome.storage?.local) return;
-  try {
-    await chrome.storage.local.remove(STORAGE_KEY);
+    await chrome.storage.local.set({ [storageKey(conversationFingerprint)]: list });
   } catch {
     // ignore
   }
 }
 
-export async function findCopiedRecord(conversationId: string, turnIndex: number, blockIndex: number, fingerprint: string): Promise<boolean> {
-  const history = await getCopiedHistory();
-  const list = history[conversationId] ?? [];
-  const rec = list.find(r => r.turnIndex === turnIndex && r.blockIndex === blockIndex && r.fingerprint === fingerprint);
-  return !!rec;
+export async function removeCopiedRecord(conversationFingerprint: string, turnIndex: number, blockIndex: number): Promise<void> {
+  if (typeof chrome === "undefined" || !chrome.storage?.local) return;
+  try {
+    const list = await getCopiedRecords(conversationFingerprint);
+    const filtered = list.filter(r => !(r.turnIndex === turnIndex && r.blockIndex === blockIndex));
+    await chrome.storage.local.set({ [storageKey(conversationFingerprint)]: filtered });
+  } catch {
+    // ignore
+  }
+}
+
+export async function clearCopiedHistory(conversationFingerprint: string): Promise<void> {
+  if (typeof chrome === "undefined" || !chrome.storage?.local) return;
+  try {
+    await chrome.storage.local.remove(storageKey(conversationFingerprint));
+  } catch {
+    // ignore
+  }
 }
