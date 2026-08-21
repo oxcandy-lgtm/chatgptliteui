@@ -130,13 +130,10 @@ export async function performCopy(
     return "unavailable";
   }
   try {
-    // Synchronous call from the gesture; no preceding await that would drop
-    // activation.
-    void navigator.clipboard.writeText(text).then(() => {
-      // Reference dropped after resolution; nothing retained.
-    }).catch(() => {});
-    // Await only to report success status; the write was already initiated.
-    await navigator.clipboard.writeText(text);
+    // Single synchronous call from the gesture; await the same promise.
+    const writePromise = navigator.clipboard.writeText(text);
+    // No preceding await that would drop activation; the call is made synchronously.
+    await writePromise;
     return "copied";
   } catch {
     return "unavailable";
