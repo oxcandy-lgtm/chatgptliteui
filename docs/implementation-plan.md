@@ -79,7 +79,7 @@ ChatGPT navigation:
   extension-owned state. Detection failure preserves the official UI.
 - No new Chrome permission, no Service Worker, no network behavior.
 
-## Phase 4 — Writing-block copy controls
+## Phase 4 — Writing-block copy controls (implemented)
 
 - Detect writing blocks and track the most viewport-centered one.
 - Floating copy button inside a Shadow DOM (no style clash).
@@ -89,6 +89,8 @@ ChatGPT navigation:
 - Never add `clipboardWrite` unless real-browser evidence proves it necessary
   and a separate permission review approves it. Never read the clipboard. Never
   store copied content.
+- Fixed shortcut `Alt+Shift+C`, privacy-safe detection with pre/code rejection,
+  global DOM isolation in tests, audit fixture hardening, and complete restore/teardown.
 
 > **Tracking correction:** do not use `IntersectionObserver` with only
 > `threshold: 0.5`; large blocks may never reach 50% visibility. Collect

@@ -228,9 +228,33 @@ export const STRATEGIES: Record<SelectorTarget, SelectorStrategy[]> = {
   ],
   writingBlock: [
     {
-      id: "writing-block-heuristic",
+      id: "text-block-semantic",
       root: "container",
-      selector: '[data-message-author-role="assistant"] [data-testid="text-block"], [data-message-author-role="assistant"] p',
+      // High-confidence: an Assistant turn containing an explicit text-block
+      // container (the canonical Assistant prose block).
+      selector:
+        '[data-message-author-role="assistant"] [data-testid="text-block"]',
+      cardinality: "multiple",
+      requireVisible: false,
+      confidence: "high",
+    },
+    {
+      id: "assistant-prose-block",
+      root: "container",
+      // Medium confidence: a uniquely identified Assistant prose block that is
+      // not merely a bare paragraph heuristic.
+      selector:
+        '[data-message-author-role="assistant"] [data-testid="message-text-block"], [data-message-author-role="assistant"] [data-testid="message-content"]',
+      cardinality: "multiple",
+      requireVisible: false,
+      confidence: "medium",
+    },
+    {
+      id: "bare-assistant-paragraph",
+      root: "container",
+      // Low confidence: a bare Assistant <p> heuristic. Diagnostic candidate
+      // only — MUST NOT authorize copy behavior.
+      selector: '[data-message-author-role="assistant"] p',
       cardinality: "multiple",
       requireVisible: false,
       confidence: "low",

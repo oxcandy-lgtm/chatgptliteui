@@ -62,6 +62,29 @@
       </section>
 
       <section>
+        <h2>Writing copy</h2>
+        <label class="cgl-row">
+          <span>Enable floating copy control</span>
+          <input type="checkbox" id="writingCopyEnabled" />
+        </label>
+        <label class="cgl-row">
+          <span>Position</span>
+          <select id="writingCopyPosition">
+            <option value="top-right">Top right</option>
+            <option value="middle-right">Middle right</option>
+            <option value="bottom-right">Bottom right</option>
+          </select>
+        </label>
+        <label class="cgl-row">
+          <span>Enable Alt+Shift+C shortcut</span>
+          <input type="checkbox" id="writingCopyShortcut" />
+        </label>
+        <p class="cgl-note">
+          Copied content is not stored. The extension never reads the clipboard.
+        </p>
+      </section>
+
+      <section>
         <h2>Rendering</h2>
         <label class="cgl-row">
           <span>Disable animations and transitions</span>
@@ -139,9 +162,14 @@
           <span>Text color</span>
           <input type="text" class="cgl-color" id="textColor" inputmode="text" />
         </label>
+        <label class="cgl-row">
+          <span>Writing-block background</span>
+          <input type="text" class="cgl-color" id="writingBlockBackground" inputmode="text" />
+        </label>
         <p class="cgl-note">
-          Writing-block background is reserved for a future phase and is not
-          applied in this release.
+          Writing-block background is applied only when Writing copy is enabled
+          and a custom theme is active, and only to safely detected writing
+          blocks.
         </p>
       </section>
 

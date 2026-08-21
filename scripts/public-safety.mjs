@@ -178,6 +178,23 @@ const RULES = [
     category: "sourcemap-leak",
     test: (l) => /sourceMappingURL=|sourcesContent:|^\/\/# sourceMappingURL=.*\.map/.test(l),
   },
+  // Prohibited clipboard-read API. Writing-copy must only WRITE, never read.
+  // Scoped to source-like files; docs describe the policy in prose without the
+  // literal API token.
+  {
+    id: "CLIPBOARD_READ_API",
+    category: "clipboard-read",
+    only: /\.(ts|tsx|js|mjs|cjs|json)$/,
+    test: (l) => /navigator\.clipboard\.readText|clipboard\.readText|clipboardRead/.test(l),
+  },
+  // Prohibited clipboard-write permission and execCommand copy fallback.
+  {
+    id: "CLIPBOARD_WRITE_OR_EXEC",
+    category: "clipboard-write-or-exec",
+    only: /\.(ts|tsx|js|mjs|cjs|json)$/,
+    test: (l) =>
+      /clipboardWrite|document\.execCommand|execCommand\(/.test(l),
+  },
 ];
 // RULES-END: end of the narrow self-exempt rule-declaration block.
 
@@ -302,6 +319,7 @@ for (const rel of collectFiles()) {
     // lines (computed above). Any other line in this file is still scanned.
     if (SELF_EXEMPT.has(`${rel}:${idx + 1}`)) return;
     for (const rule of RULES) {
+      if (rule.only && !rule.only.test(rel)) continue;
       if (rule.test(line)) {
         violations++;
         // Print ONLY safe metadata. Never the matched text.

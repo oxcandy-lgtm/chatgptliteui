@@ -114,16 +114,47 @@ describe("Options transparent assistant + reserved field (Blockers 6 & 7)", () =
     teardown();
   });
 
-  it("reserved writing-block background survives an unrelated save", async () => {
+  it("editing writing-block background persists the new validated value", async () => {
     const s = cloneDefaults();
     s.theme.writingBlockBackground = "#0a1b2c"; // non-default reserved value
     const { store, dom } = await setup(s);
-    // Edit an unrelated field (font size) then save.
-    (dom.window.document.getElementById("useFontSize") as HTMLInputElement).checked = true;
-    (dom.window.document.getElementById("fontSize") as HTMLInputElement).value = "18";
+    // Form input loads the stored value.
+    const wbb = dom.window.document.getElementById("writingBlockBackground") as HTMLInputElement;
+    expect(wbb.value.toLowerCase()).toBe("#0a1b2c");
+    // Edit and save.
+    wbb.value = "#bbccdd";
     click(dom, "save");
     await new Promise((r) => setTimeout(r, 0));
-    expect(storedSettings({ store, dom }).theme.writingBlockBackground).toBe("#0a1b2c");
+    expect(storedSettings({ store, dom }).theme.writingBlockBackground).toBe("#bbccdd");
+    teardown();
+  });
+
+  it("writing-block background round-trips #rgb, #rrggbb, and #rrggbbaa", async () => {
+    const s = cloneDefaults();
+    const { store, dom } = await setup(s);
+    for (const value of ["#abc", "#aabbcc", "#aabbccff"]) {
+      const wbb = dom.window.document.getElementById("writingBlockBackground") as HTMLInputElement;
+      wbb.value = value;
+      click(dom, "save");
+      await new Promise((r) => setTimeout(r, 0));
+      expect(storedSettings({ store, dom }).theme.writingBlockBackground).toBe(value);
+    }
+    teardown();
+  });
+
+  it("invalid writing-block background values are rejected (save fails closed)", async () => {
+    const s = cloneDefaults();
+    s.theme.writingBlockBackground = "#161b25";
+    const { store, dom } = await setup(s);
+    const bad = ["red; x", "rgb(1,2,3)", "url(http://evil)", "var(--x)", "calc(1px)", "#gggggg", "123456"];
+    for (const value of bad) {
+      const wbb = dom.window.document.getElementById("writingBlockBackground") as HTMLInputElement;
+      wbb.value = value;
+      click(dom, "save");
+      await new Promise((r) => setTimeout(r, 0));
+      // Persisted value must remain the untouched default, never the bad string.
+      expect(storedSettings({ store, dom }).theme.writingBlockBackground).toBe("#161b25");
+    }
     teardown();
   });
 
@@ -148,20 +179,20 @@ describe("Options transparent assistant + reserved field (Blockers 6 & 7)", () =
 describe("Options fresh-state preservation + color round-trip (Fix 4 & 5)", () => {
   afterEach(() => vi.resetModules());
 
-  it("appearance-only save preserves deferred/reserved sections changed after load", async () => {
+  it("appearance-only save preserves deferred sections changed after load", async () => {
     const s = cloneDefaults();
     s.sidebar.mode = "hover";
     s.history.visiblePairs = 5;
     s.theme.writingBlockBackground = "#0a1b2c";
     const { store, dom } = await setup(s);
-    // Simulate external change to deferred/reserved sections AFTER the page loaded.
+    // Simulate external change to deferred sections AFTER the page loaded.
     const env = store.settings as StoredSettingsEnvelope;
     env.settings.sidebar.mode = "button";
     env.settings.history.visiblePairs = 12;
     env.settings.theme.writingBlockBackground = "#123456";
-    // The options page sidebar selector is a first-class field; reflect the
-    // external change in the form so an appearance-only save writes it back.
+    // Reflect the external changes in the form so a save writes them back.
     (dom.window.document.getElementById("sidebarMode") as HTMLSelectElement).value = "button";
+    (dom.window.document.getElementById("writingBlockBackground") as HTMLInputElement).value = "#123456";
     // Make an appearance-only edit (enable compact spacing) and save.
     (dom.window.document.getElementById("compactSpacing") as HTMLInputElement).checked = true;
     click(dom, "save");
@@ -176,13 +207,14 @@ describe("Options fresh-state preservation + color round-trip (Fix 4 & 5)", () =
     teardown();
   });
 
-  it("a newly changed reserved writing-block color is preserved even after load", async () => {
+  it("a writing-block color edited after load is persisted by an unrelated save", async () => {
     const s = cloneDefaults();
     s.theme.writingBlockBackground = "#0a1b2c";
     const { store, dom } = await setup(s);
-    // External update to reserved writing-block after load.
+    // External update to writing-block after load, reflected in the form.
     const env = store.settings as StoredSettingsEnvelope;
     env.settings.theme.writingBlockBackground = "#fedcba";
+    (dom.window.document.getElementById("writingBlockBackground") as HTMLInputElement).value = "#fedcba";
     // Save an unrelated appearance edit.
     (dom.window.document.getElementById("disableAnimations") as HTMLInputElement).checked = true;
     click(dom, "save");

@@ -8,6 +8,8 @@ import { hasAppearanceEffects } from "../features/appearance/presets.js";
 import { hasSidebarEffects } from "../features/sidebar/sidebar-state.js";
 import { SidebarController } from "../features/sidebar/sidebar-controller.js";
 import { findSafeSidebarTarget, SIDEBAR_HOST_ID } from "../features/sidebar/sidebar-detection.js";
+import { WritingCopyController, WRITING_COPY_HOST_ATTR } from "../features/writing-copy/writing-copy-controller.js";
+import { hasWritingCopyEffects } from "../features/writing-copy/writing-copy-state.js";
 import { logger } from "../shared/logger.js";
 
 /**
@@ -37,6 +39,7 @@ import { logger } from "../shared/logger.js";
 const applier = new ThemeApplier();
 const adapter = createAdapter();
 const sidebarController = new SidebarController(document.documentElement, adapter);
+const writingCopyController = new WritingCopyController(document.documentElement, adapter);
 const routeListener = new RouteListener();
 
 let observer: MutationObserver | null = null;
@@ -44,8 +47,10 @@ let observedTarget: Node | null = null;
 
 /** Runtime enabled flag (Fix 2): keyboard shortcut is gated on this. */
 let runtimeEnabled = false;
-/** Whether the keydown listener is currently attached (Fix 2, no dup). */
+/** Whether the sidebar keydown listener is currently attached (Fix 2, no dup). */
 let keyboardListenerAttached = false;
+/** Whether the writing-copy keydown listener is currently attached (no dup). */
+let writingCopyListenerAttached = false;
 /**
  * Observer epoch (Fix 4): every disconnect bumps it. A pending async reconnect
  * from a mutation callback carries the epoch it was issued under; if the epoch
@@ -58,14 +63,15 @@ let lastSettings: Settings | null = null;
 
 /**
  * Effective runtime observation requirement (Fix 3): appearance effects, a
- * non-visible persisted mode, OR an active transient sidebar effect (e.g. a
- * Visible-mode temporary hide) all require the structural observer.
+ * non-visible persisted sidebar mode, an active transient sidebar effect, OR
+ * an active writing-copy effect all require the structural observer.
  */
 function hasRuntimeEffects(settings: Settings): boolean {
   return (
     hasAppearanceEffects(settings) ||
     hasSidebarEffects(settings) ||
-    sidebarController.hasTransientSidebarEffect()
+    sidebarController.hasTransientSidebarEffect() ||
+    hasWritingCopyEffects(settings)
   );
 }
 
@@ -79,6 +85,7 @@ const scheduleMarkerRefresh = debounce((): void => {
   void getSettings().then((settings) => {
     applier.refreshMarkers(settings);
     sidebarController.refresh(settings);
+    writingCopyController.refresh(settings);
   });
 }, 120);
 
@@ -86,8 +93,9 @@ const scheduleMarkerRefresh = debounce((): void => {
 function syncRuntime(settings: Settings): void {
   applier.apply(settings);
   sidebarController.apply(settings);
+  writingCopyController.apply(settings);
 
-  // Fix 2: reflect enabled state and attach/detach the shortcut listener.
+  // Fix 2: reflect enabled state and attach/detach the sidebar shortcut listener.
   runtimeEnabled = settings.enabled;
   if (settings.enabled && !keyboardListenerAttached) {
     document.addEventListener("keydown", handleKeydown);
@@ -95,6 +103,17 @@ function syncRuntime(settings: Settings): void {
   } else if (!settings.enabled && keyboardListenerAttached) {
     document.removeEventListener("keydown", handleKeydown);
     keyboardListenerAttached = false;
+  }
+
+  // Phase 4: attach/detach the writing-copy shortcut listener independently so
+  // it can be active only when the feature (and its shortcut) is enabled, and
+  // never duplicates across repeated apply calls.
+  if (writingCopyController.isShortcutActive(settings) && !writingCopyListenerAttached) {
+    document.addEventListener("keydown", writingCopyController.keyboardHandler);
+    writingCopyListenerAttached = true;
+  } else if (!writingCopyController.isShortcutActive(settings) && writingCopyListenerAttached) {
+    document.removeEventListener("keydown", writingCopyController.keyboardHandler);
+    writingCopyListenerAttached = false;
   }
 
   // Fix 3+4: synchronous connect/disconnect from validated settings.
@@ -127,12 +146,13 @@ function reconcileObserver(): void {
   }
 }
 
-/** Whether a node is the extension-owned sidebar control host (ignore it). */
+/** Whether a node is the extension-owned sidebar/writing-copy control host (ignore it). */
 function isExtensionHost(node: Node): boolean {
   return (
     node instanceof HTMLElement &&
     (node.id === SIDEBAR_HOST_ID ||
       node.getAttribute("data-cgl-sidebar-host") === "true" ||
+      node.getAttribute(WRITING_COPY_HOST_ATTR) === "true" ||
       node.tagName.toLowerCase() === "style")
   );
 }
@@ -251,14 +271,19 @@ function teardown(): void {
   // Cancel any pending debounced refresh so it cannot re-mark the DOM after
   // teardown.
   scheduleMarkerRefresh.cancel();
-  // Fix 2: remove the shortcut listener.
+  // Fix 2: remove the shortcut listeners.
   if (keyboardListenerAttached) {
     document.removeEventListener("keydown", handleKeydown);
     keyboardListenerAttached = false;
   }
+  if (writingCopyListenerAttached) {
+    document.removeEventListener("keydown", writingCopyController.keyboardHandler);
+    writingCopyListenerAttached = false;
+  }
   runtimeEnabled = false;
   disconnectObserver();
   sidebarController.teardown();
+  writingCopyController.teardown();
   applier.restore();
 }
 
@@ -266,6 +291,7 @@ function teardown(): void {
 function reapplyAfterRouteChange(): void {
   applier.restore();
   sidebarController.restore();
+  writingCopyController.restore();
   adapter.refresh();
   applyCurrent();
 }
@@ -334,8 +360,18 @@ async function bootstrap(): Promise<void> {
         const prev = lastSettings;
         const modeChanged = !!prev && s.sidebar.mode !== prev.sidebar.mode;
         const disabled = !!prev && prev.enabled && !s.enabled;
+        const writingCopyRelevant =
+          !!prev &&
+          (s.writingCopy.enabled !== prev.writingCopy.enabled ||
+            s.writingCopy.position !== prev.writingCopy.position ||
+            s.writingCopy.shortcutEnabled !== prev.writingCopy.shortcutEnabled ||
+            s.appearance.useTheme !== prev.appearance.useTheme ||
+            s.theme.writingBlockBackground !== prev.theme.writingBlockBackground);
         if (modeChanged || disabled) {
           sidebarController.clearTransient();
+        }
+        if (writingCopyRelevant) {
+          writingCopyController.restore();
         }
         syncRuntime(s);
       });
@@ -350,6 +386,7 @@ export {
   applier,
   adapter,
   sidebarController,
+  writingCopyController,
   routeListener,
   connectObserver,
   disconnectObserver,

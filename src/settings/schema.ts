@@ -16,7 +16,7 @@ import { cloneDefaults } from "./defaults.js";
  *  - Color fields must match the conservative public grammar.
  *  - No string field may accept chat-like content; the schema simply does not
  *    contain fields for that data, so attempting to store `messageText`,
- *    `chatTitle`, `copiedText`, or `innerHTML` is rejected purely because those
+ *    `chatTitle`, or `innerHTML` is rejected purely because those
  *    keys are not part of the schema.
  */
 
@@ -205,6 +205,11 @@ export function validateSettings(value: unknown): value is Settings {
   return true;
 }
 
+/** Recursively partial type for nested settings patches. */
+export type DeepPartial<T> = {
+  [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K];
+};
+
 /**
  * Validated deep merge for nested settings.
  *
@@ -214,7 +219,7 @@ export function validateSettings(value: unknown): value is Settings {
  */
 export function mergeSettings(
   base: Settings,
-  patch: Partial<Settings>,
+  patch: DeepPartial<Settings>,
 ): Settings {
   const next = cloneDefaults();
   // Start from a validated base (fall back to defaults if base is bad).

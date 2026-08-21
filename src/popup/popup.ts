@@ -78,6 +78,21 @@ function bind(): void {
           });
       });
     }
+    const writingCopy = document.getElementById("writingCopyEnabled") as HTMLInputElement | null;
+    if (writingCopy) {
+      writingCopy.checked = settings.writingCopy.enabled;
+      writingCopy.addEventListener("change", () => {
+        // Patch ONLY writingCopy.enabled; preserve everything else.
+        void getSettings()
+          .then(() => updateSettings({ writingCopy: { enabled: writingCopy.checked } }))
+          .then(() => {
+            if (status) status.textContent = `Writing copy: ${writingCopy.checked ? "on" : "off"}.`;
+          })
+          .catch(() => {
+            if (status) status.textContent = "Save failed.";
+          });
+      });
+    }
     if (status) status.textContent = "Settings loaded.";
   });
 }

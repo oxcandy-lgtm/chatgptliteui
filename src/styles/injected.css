@@ -102,3 +102,13 @@
 :root.cgl-sidebar-closed [data-cgl-sidebar-target] {
   display: none !important;
 }
+
+/* ---- writing-block background (Phase 4): guarded, marker-only ------------
+ * Applied ONLY when writingCopy is enabled AND useTheme is on. Scoped strictly
+ * to the safely detected writing block (marked `data-cgl-writing-block`),
+ * never to entire Assistant turns, code blocks, dialogs, composer, sidebar, or
+ * low-confidence candidates. The CSS variable is removed on restoration (the
+ * `cgl-writing-copy-active` class is toggled off by the controller). */
+:root.cgl-writing-copy-active [data-cgl-writing-block] {
+  background-color: var(--cgl-writing-bg);
+}

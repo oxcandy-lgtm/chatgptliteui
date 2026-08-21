@@ -1,7 +1,7 @@
 # Architecture
 
 This document describes the structure of the ChatGPTLiteUI extension
-(Manifest V3) as of Phase 3 (appearance controls + safe sidebar visibility).
+(Manifest V3) as of Phase 4 (appearance controls + safe sidebar visibility + writing block copy controls).
 
 ## High-level design
 
@@ -27,10 +27,11 @@ src/
   adapters/       ChatGPT DOM detection (non-destructive)
   features/appearance/  presets, markers, appearance controller
   features/sidebar/     sidebar state, markers, detection, control host, controller
+  features/writing-copy/ writing copy detection, tracker, host, controller, copy action, markers, state
   settings/       schema (v2), defaults, migration, storage
   shared/         debounce, logger, shared types
-  popup/          enable/preset/sidebar popup
-  options/        full Phase 2/3 appearance + sidebar editor
+  popup/          enable/preset/sidebar/writing-copy popup
+  options/        full Phase 2/3/4 appearance + sidebar + writing-copy editor
   styles/         CSS variable + injected style layers
 scripts/          build + safety/audit tooling
 tests/            unit, adapter, settings, security, feature tests
@@ -101,18 +102,30 @@ or roles.
   remove every `cgl-sidebar-*` class, marker, host, listener, timer, and
   reference idempotently.
 
+### Writing copy feature (`src/features/writing-copy/`)
+
+Phase 4 adds privacy-safe copy of Assistant writing blocks.
+
+- `writing-copy-state.ts`: pure helpers for background activation and root classes.
+- `writing-copy-markers.ts`: single boolean marker `data-cgl-writing-block="true"` and idempotent clear.
+- `writing-copy-detection.ts`: safe detection with semantic confidence, rejects code/pre, rejects `containsAnotherTurn`, deterministic high/medium confidence.
+- `writing-copy-tracker.ts`: IntersectionObserver-based viewport-centered target selection with rAF throttling, deterministic tie-breaking, zero-size/off-screen filtering.
+- `writing-copy-host.ts`: single Shadow DOM host for copy button, status feedback, positioning against active block with viewport clamping.
+- `copy-action.ts`: copy path with native copy preference and Clipboard API fallback, strict no-read, no-log, no-retain invariants.
+- `writing-copy-controller.ts`: orchestrates detection, marking, tracker, host, shortcut `Alt+Shift+C`, background guard, full restore/teardown.
+
 ### Content runtime (`src/content/`)
 
 - `index.ts` bootstraps, applies appearance and sidebar settings, wires
   `chrome.storage.onChanged`, handles the fixed `Alt+Shift+L` sidebar shortcut
-  (validated: enabled-only, ignore repeat/composition, ignore editable fields,
+  and `Alt+Shift+C` writing-copy shortcut (validated: enabled-only, ignore repeat/composition, ignore editable fields,
   `preventDefault` only on exact match), and re-applies on SPA route changes
   (restore → refresh adapter → apply). A mode change clears transient state.
 - `lifecycle.ts` wires the `AppearanceController` to the document root.
 - `route-listener.ts` detects single-page-app route changes without
   monkeypatching `history.pushState`, using `popstate`/`pageshow`, a
   `location` signature, and observer-triggered checks. No high-frequency timer.
-- The `SidebarController` instance is owned by the content runtime and shares
+- The `SidebarController` and `WritingCopyController` instances are owned by the content runtime and share
   the same debounced refresh path and observer lifecycle as appearance.
 
 ## Observers
@@ -135,8 +148,6 @@ against the locked architecture decisions.
 
 ## Deferred extension points
 
-The Adapter and settings schema include fields and interfaces for copy helpers,
-folding, and history limiting. Destructive operations (especially history
-hiding) will require high-confidence detection plus extra safety invariants and
-reload-based restoration. These are not implemented in Phase 3. Sidebar control
-is implemented as a non-destructive, CSS-based visibility feature.
+The Adapter and settings schema include fields and interfaces for code/long-response folding,
+and history limiting. Destructive operations (especially history hiding) will require high-confidence detection plus extra safety invariants and
+reload-based restoration. These are not implemented in Phase 4. Writing copy is implemented as a non-destructive, marker-based copy feature; sidebar control remains CSS-based visibility.

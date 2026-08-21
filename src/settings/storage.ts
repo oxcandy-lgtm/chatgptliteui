@@ -1,7 +1,7 @@
 import type { Settings, StoredSettingsEnvelope } from "../shared/types.js";
 import { SETTINGS_STORAGE_KEY } from "../shared/types.js";
 import { cloneDefaults } from "./defaults.js";
-import { validateSettings, mergeSettings } from "./schema.js";
+import { validateSettings, mergeSettings, type DeepPartial } from "./schema.js";
 import { migrateEnvelope, toEnvelope } from "./migration.js";
 import { logger } from "../shared/logger.js";
 
@@ -51,7 +51,7 @@ export async function getSettings(): Promise<Settings> {
  * Applies a partial update through a validated deep merge and persists the
  * resulting envelope. Rejects unknown keys and out-of-schema fields.
  */
-export async function updateSettings(patch: Partial<Settings>): Promise<Settings> {
+export async function updateSettings(patch: DeepPartial<Settings>): Promise<Settings> {
   const current = await getSettings();
   const next = mergeSettings(current, patch);
   await persist(next);

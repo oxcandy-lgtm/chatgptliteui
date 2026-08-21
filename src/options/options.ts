@@ -70,9 +70,15 @@ function readForm(current: Settings): Partial<Settings> {
     theme[f] = value;
   }
   theme.assistantBackground = assistantBackground;
-  // Preserve the reserved writing-block background from the freshly loaded
-  // current settings (may have changed after the page originally loaded).
-  theme.writingBlockBackground = current.theme.writingBlockBackground;
+  // Writing-block background is now an editable theme field (Phase 4), but its
+  // saved value is still preserved from the freshly loaded `current` to avoid
+  // clobbering concurrent edits; here we read it from the form when present.
+  const wbb = el<HTMLInputElement>("writingBlockBackground").value.trim();
+  if (isAllowedColor(wbb)) {
+    theme.writingBlockBackground = wbb;
+  } else {
+    theme.writingBlockBackground = current.theme.writingBlockBackground;
+  }
 
   // Derive the preset from the fresh current value plus the newly read
   // appearance/theme.
@@ -83,16 +89,35 @@ function readForm(current: Settings): Partial<Settings> {
     appearance,
     theme,
     sidebar: { mode: sidebarMode },
+    writingCopy: {
+      enabled: el<HTMLInputElement>("writingCopyEnabled").checked,
+      position: el<HTMLSelectElement>("writingCopyPosition").value as Settings["writingCopy"]["position"],
+      shortcutEnabled: el<HTMLInputElement>("writingCopyShortcut").checked,
+    },
   };
   const derived = detectAppearancePreset(merged);
 
-  return { enabled, preset: derived, appearance, theme, sidebar: { mode: sidebarMode } };
+  return {
+    enabled,
+    preset: derived,
+    appearance,
+    theme,
+    sidebar: { mode: sidebarMode },
+    writingCopy: {
+      enabled: el<HTMLInputElement>("writingCopyEnabled").checked,
+      position: el<HTMLSelectElement>("writingCopyPosition").value as Settings["writingCopy"]["position"],
+      shortcutEnabled: el<HTMLInputElement>("writingCopyShortcut").checked,
+    },
+  };
 }
 
 function writeForm(settings: Settings): void {
   el<HTMLInputElement>("enabled").checked = settings.enabled;
   el<HTMLSelectElement>("preset").value = settings.preset;
   el<HTMLSelectElement>("sidebarMode").value = settings.sidebar.mode;
+  el<HTMLInputElement>("writingCopyEnabled").checked = settings.writingCopy.enabled;
+  el<HTMLSelectElement>("writingCopyPosition").value = settings.writingCopy.position;
+  el<HTMLInputElement>("writingCopyShortcut").checked = settings.writingCopy.shortcutEnabled;
   const a = settings.appearance;
   el<HTMLInputElement>("disableAnimations").checked = a.disableAnimations;
   el<HTMLInputElement>("disableBlur").checked = a.disableBlur;
@@ -106,6 +131,7 @@ function writeForm(settings: Settings): void {
   for (const f of COLOR_FIELDS) {
     el<HTMLInputElement>(f).value = settings.theme[f as ColorField];
   }
+  el<HTMLInputElement>("writingBlockBackground").value = settings.theme.writingBlockBackground;
   // Assistant: derive transparent checkbox from the stored value; keep the
   // color input on a safe opaque value, never "transparent".
   const assistant = settings.theme.assistantBackground;
