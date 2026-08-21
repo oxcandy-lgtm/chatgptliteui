@@ -10,6 +10,7 @@ import { performCopy } from "./copy-action.js";
 import {
   markWritingBlock,
   clearAllWritingCopyMarkers,
+  setWritingCopyState,
 } from "./writing-copy-markers.js";
 import {
   hasWritingCopyEffects,
@@ -19,21 +20,30 @@ import {
 import { saveCopiedRecord, getCopiedRecords, removeCopiedRecord } from "./copied-state-store.js";
 import { fingerprintText } from "./content-fingerprint.js";
 import { extractBlockText } from "./copy-action.js";
-import { deriveBlockIdentity, conversationFingerprintFromLocation } from "./block-identity.js";
+import {
+  deriveBlockIdentity,
+  conversationFingerprintFromLocation,
+} from "./block-identity.js";
 
 /**
  * Writing-copy controller (Phase 4).
  *
- * Strictly non-destructive. The ONLY permitted mutation on a detected ChatGPT
- * writing block is ONE extension-owned boolean marker
- * (`data-cgl-writing-block="true"`), plus an optional guarded background color
- * scoped to that marker under the `cgl-writing-copy-active` root class.
+ * Strictly non-destructive. The ONLY permitted mutations on a detected ChatGPT
+ * writing block are TWO extension-owned attributes: the boolean marker
+ * (`data-cgl-writing-block="true"`) and the semantic state marker
+ * (`data-cgl-writing-copy-state="copied|uncopied"`), plus an optional guarded
+ * background color scoped to the boolean marker under the
+ * `cgl-writing-copy-active` root class.
  *
  * Responsibilities:
  *  - track the most viewport-centered safe Assistant writing block;
  *  - display exactly one extension-owned Shadow DOM copy button;
  *  - prefer a safely associated original ChatGPT copy action, else call
  *    `navigator.clipboard.writeText` only from a direct user gesture;
+ *  - persist a durable copied record ONLY when conversation identity and the
+ *    durable save succeed, then immediately reflect the semantic COPIED state;
+ *  - hydrate persisted copied state with an epoch guard so a stale hydration
+ *    can never apply across route switches, disables, restores, or teardowns;
  *  - never read the clipboard, never store/log/transmit copied text;
  *  - completely restore the official UI when disabled or torn down.
  *
@@ -52,6 +62,12 @@ export class WritingCopyController {
   private enabled = false;
   private position: CopyPosition = "middle-right";
   private activeBlock: HTMLElement | null = null;
+  /**
+   * Hydration epoch (race guard): every restore/teardown and every new
+   * hydration generation invalidates all in-flight hydrations. A hydration
+   * applies state or deletes records only while its epoch is still current.
+   */
+  private hydrationEpoch = 0;
 
   /** Bound keyboard handler (single reference reused for attach/detach). */
   private readonly keyHandler: (e: KeyboardEvent) => void;
@@ -135,29 +151,47 @@ export class WritingCopyController {
   }
 
   private async hydrateState(): Promise<void> {
-    const conversationFp = conversationFingerprintFromLocation();
-    if (!conversationFp || conversationFp === "c0") return;
+    const epoch = ++this.hydrationEpoch;
+    const conversationFp = await conversationFingerprintFromLocation();
+    if (!conversationFp || !this.isHydrationCurrent(epoch)) return;
     const records = await getCopiedRecords(conversationFp);
+    if (!this.isHydrationCurrent(epoch)) return;
     const blocks = findSafeWritingBlocks(this.adapter);
     for (const block of blocks) {
+      if (!this.isHydrationCurrent(epoch) || !block.isConnected) continue;
       const identity = deriveBlockIdentity(block, this.adapter);
       if (identity.turnIndex < 0 || identity.blockIndex < 0) continue;
       try {
         const text = extractBlockText(block);
         const fingerprint = await fingerprintText(text);
-        const rec = records.find(r => r.turnIndex === identity.turnIndex && r.blockIndex === identity.blockIndex);
+        // Confirm epoch AND that this block is still connected/current before
+        // applying a marker or deleting stale storage.
+        if (!this.isHydrationCurrent(epoch) || !block.isConnected) return;
+        const rec = records.find(
+          (r) => r.turnIndex === identity.turnIndex && r.blockIndex === identity.blockIndex,
+        );
         if (rec && rec.fingerprint === fingerprint) {
-          block.setAttribute("data-cgl-writing-copy-state", "copied");
+          setWritingCopyState(block, "copied");
         } else {
-          block.setAttribute("data-cgl-writing-copy-state", "uncopied");
-          if (rec && rec.fingerprint !== fingerprint) {
-            await removeCopiedRecord(conversationFp, identity.turnIndex, identity.blockIndex);
-          }
+          setWritingCopyState(block, "uncopied");
+          if (rec) await removeCopiedRecord(conversationFp, identity.turnIndex, identity.blockIndex);
         }
       } catch {
-        block.setAttribute("data-cgl-writing-copy-state", "uncopied");
+        if (!this.isHydrationCurrent(epoch)) return;
+        setWritingCopyState(block, "uncopied");
       }
     }
+  }
+
+  /** Whether the given hydration generation is still authoritative. */
+  private isHydrationCurrent(epoch: number): boolean {
+    return (
+      epoch === this.hydrationEpoch &&
+      this.enabled &&
+      // The runtime document can disappear (teardown, context invalidation);
+      // a hydration without a live document must not touch the DOM.
+      typeof document !== "undefined"
+    );
   }
 
   /** Recompute the active target immediately (used before a copy action). */
@@ -206,33 +240,48 @@ export class WritingCopyController {
       case "requested":
         this.host.setStatus("requested");
         break;
-      case "copied":
+      case "copied": {
         this.host.setStatus("copied");
-        if (target) {
-          try {
-            const conversationFp = conversationFingerprintFromLocation();
-            if (conversationFp && conversationFp !== "c0") {
-              const text = extractBlockText(target);
-              const fingerprint = await fingerprintText(text);
-              const identity = deriveBlockIdentity(target, this.adapter);
-              if (identity.turnIndex >= 0 && identity.blockIndex >= 0) {
-                await saveCopiedRecord(conversationFp, {
-                  turnIndex: identity.turnIndex,
-                  blockIndex: identity.blockIndex,
-                  fingerprint,
-                  copiedAt: Date.now(),
-                });
-              }
-            }
-          } catch {
-            // fail closed on persistence errors
-          }
-        }
+        const persisted = await this.persistCopiedState(target);
+        // Semantic COPIED requires a valid durable record. The clipboard
+        // operation may still report "Copied." to the host, but without a
+        // durable save (or without valid conversation identity) the block is
+        // NOT claimed as copied — no fake durable success.
+        if (persisted && target) setWritingCopyState(target, "copied");
+        else if (target) setWritingCopyState(target, "uncopied");
         break;
+      }
       case "unavailable":
       default:
         this.host.setStatus("unavailable");
         break;
+    }
+  }
+
+  /**
+   * Persist the durable copied record for a successfully copied block.
+   *
+   * Resolves `true` ONLY when conversation identity, content fingerprint,
+   * structural identity, and the durable save all succeed. Any failure —
+   * including an invalid route (no conversation token) — resolves `false` and
+   * the caller must not set semantic COPIED. No retries.
+   */
+  private async persistCopiedState(target: HTMLElement | null): Promise<boolean> {
+    if (!target) return false;
+    try {
+      const conversationFp = await conversationFingerprintFromLocation();
+      if (!conversationFp) return false;
+      const identity = deriveBlockIdentity(target, this.adapter);
+      if (identity.turnIndex < 0 || identity.blockIndex < 0) return false;
+      const fingerprint = await fingerprintText(extractBlockText(target));
+      return await saveCopiedRecord(conversationFp, {
+        turnIndex: identity.turnIndex,
+        blockIndex: identity.blockIndex,
+        fingerprint,
+        copiedAt: Date.now(),
+      });
+    } catch {
+      return false;
     }
   }
 
@@ -272,6 +321,9 @@ export class WritingCopyController {
 
   /** Completely restore the official ChatGPT UI. Idempotent. */
   restore(): void {
+    // Invalidate any in-flight hydration: a stale generation must never apply
+    // state markers or delete records after restore/teardown.
+    this.hydrationEpoch++;
     for (const cls of WRITING_COPY_ROOT_CLASSES) {
       this.root.classList.remove(cls);
     }

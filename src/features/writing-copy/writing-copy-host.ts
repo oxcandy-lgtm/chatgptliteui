@@ -82,12 +82,15 @@ export class WritingCopyHost {
    * duplicates). `onClick` is (re)bound idempotently.
    */
   mount(onClick: CopyAction): void {
-    this.onClick = onClick;
     if (this.isMounted) {
+      this.onClick = onClick;
       this.bindClick();
       return;
     }
     this.unmount();
+    // Re-bind after unmount(): unmount clears onClick, so the fresh-mount
+    // callback must be (re)assigned before bindClick() runs.
+    this.onClick = onClick;
 
     const host = document.createElement("div");
     host.id = HOST_ID;

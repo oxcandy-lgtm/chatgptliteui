@@ -7,58 +7,117 @@ export interface CopiedRecord {
   copiedAt: number;
 }
 
+/** Expected fingerprint format: non-empty lowercase hex (SHA-256 truncation). */
+const FINGERPRINT_PATTERN = /^[0-9a-f]{8,64}$/;
+
+/**
+ * Minimal structural validation for a stored record (no schema framework):
+ *  - turnIndex/blockIndex: integers >= 0
+ *  - fingerprint: non-empty fixed-format hash
+ *  - copiedAt: finite, non-negative number
+ * Malformed entries are ignored/dropped.
+ */
+export function isValidCopiedRecord(r: unknown): r is CopiedRecord {
+  if (typeof r !== "object" || r === null) return false;
+  const rec = r as Record<string, unknown>;
+  return (
+    typeof rec.turnIndex === "number" &&
+    Number.isInteger(rec.turnIndex) &&
+    rec.turnIndex >= 0 &&
+    typeof rec.blockIndex === "number" &&
+    Number.isInteger(rec.blockIndex) &&
+    rec.blockIndex >= 0 &&
+    typeof rec.fingerprint === "string" &&
+    FINGERPRINT_PATTERN.test(rec.fingerprint) &&
+    typeof rec.copiedAt === "number" &&
+    Number.isFinite(rec.copiedAt) &&
+    rec.copiedAt >= 0
+  );
+}
+
 function storageKey(conversationFingerprint: string) {
   return `${STORAGE_PREFIX}${conversationFingerprint}`;
 }
 
-export async function getCopiedRecords(conversationFingerprint: string): Promise<CopiedRecord[]> {
-  if (typeof chrome === "undefined" || !chrome.storage?.local) return [];
+function storage(): chrome.storage.StorageArea | null {
+  if (typeof chrome === "undefined" || !chrome.storage?.local) return null;
+  return chrome.storage.local;
+}
+
+export async function getCopiedRecords(
+  conversationFingerprint: string,
+): Promise<CopiedRecord[]> {
+  const store = storage();
+  if (!store || !conversationFingerprint) return [];
   try {
-    const raw = await chrome.storage.local.get(storageKey(conversationFingerprint));
-    const data = raw[storageKey(conversationFingerprint)] as CopiedRecord[] | undefined;
+    const raw = await store.get(storageKey(conversationFingerprint));
+    const data = raw[storageKey(conversationFingerprint)] as
+      | CopiedRecord[]
+      | undefined;
     if (!Array.isArray(data)) return [];
-    return data.filter(r =>
-      typeof r.turnIndex === "number" &&
-      typeof r.blockIndex === "number" &&
-      typeof r.fingerprint === "string" &&
-      typeof r.copiedAt === "number"
-    );
+    return data.filter(isValidCopiedRecord);
   } catch {
     return [];
   }
 }
 
-export async function saveCopiedRecord(conversationFingerprint: string, record: CopiedRecord): Promise<void> {
-  if (typeof chrome === "undefined" || !chrome.storage?.local) return;
+/**
+ * Persist a copied record and report REAL success.
+ *
+ * Returns `true` only when the durable write actually succeeded. The caller
+ * must treat semantic COPIED state as valid ONLY when this resolves `true` —
+ * a successful clipboard copy with a failed durable save is never reported as
+ * durably copied. No retries.
+ */
+export async function saveCopiedRecord(
+  conversationFingerprint: string,
+  record: CopiedRecord,
+): Promise<boolean> {
+  const store = storage();
+  if (!store || !conversationFingerprint || !isValidCopiedRecord(record)) {
+    return false;
+  }
   try {
     const list = await getCopiedRecords(conversationFingerprint);
-    const idx = list.findIndex(r => r.turnIndex === record.turnIndex && r.blockIndex === record.blockIndex);
-    if (idx >= 0) {
-      list[idx] = record;
-    } else {
-      list.push(record);
-    }
-    await chrome.storage.local.set({ [storageKey(conversationFingerprint)]: list });
+    const idx = list.findIndex(
+      (r) => r.turnIndex === record.turnIndex && r.blockIndex === record.blockIndex,
+    );
+    if (idx >= 0) list[idx] = record;
+    else list.push(record);
+    await store.set({ [storageKey(conversationFingerprint)]: list });
+    return true;
   } catch {
-    // ignore
+    // Real failure surfaced to the caller; no retries.
+    return false;
   }
 }
 
-export async function removeCopiedRecord(conversationFingerprint: string, turnIndex: number, blockIndex: number): Promise<void> {
-  if (typeof chrome === "undefined" || !chrome.storage?.local) return;
+export async function removeCopiedRecord(
+  conversationFingerprint: string,
+  turnIndex: number,
+  blockIndex: number,
+): Promise<boolean> {
+  const store = storage();
+  if (!store || !conversationFingerprint) return false;
   try {
     const list = await getCopiedRecords(conversationFingerprint);
-    const filtered = list.filter(r => !(r.turnIndex === turnIndex && r.blockIndex === blockIndex));
-    await chrome.storage.local.set({ [storageKey(conversationFingerprint)]: filtered });
+    const filtered = list.filter(
+      (r) => !(r.turnIndex === turnIndex && r.blockIndex === blockIndex),
+    );
+    await store.set({ [storageKey(conversationFingerprint)]: filtered });
+    return true;
   } catch {
-    // ignore
+    return false;
   }
 }
 
-export async function clearCopiedHistory(conversationFingerprint: string): Promise<void> {
-  if (typeof chrome === "undefined" || !chrome.storage?.local) return;
+export async function clearCopiedHistory(
+  conversationFingerprint: string,
+): Promise<void> {
+  const store = storage();
+  if (!store || !conversationFingerprint) return;
   try {
-    await chrome.storage.local.remove(storageKey(conversationFingerprint));
+    await store.remove(storageKey(conversationFingerprint));
   } catch {
     // ignore
   }
