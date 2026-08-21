@@ -16,6 +16,9 @@ import {
   isWritingBlockBackgroundActive,
   WRITING_COPY_ROOT_CLASSES,
 } from "./writing-copy-state.js";
+import { saveCopiedRecord } from "./copied-state-store.js";
+import { fingerprintText } from "./content-fingerprint.js";
+import { extractBlockText } from "./copy-action.js";
 
 /**
  * Writing-copy controller (Phase 4).
@@ -165,8 +168,9 @@ export class WritingCopyController {
   /** Invoked by the Shadow DOM button (a direct user gesture). */
   private async onCopyRequested(): Promise<void> {
     this.host.setStatus("idle");
+    const target = this.currentSafeTarget();
     const outcome = await performCopy(
-      () => this.currentSafeTarget(),
+      () => target,
       this.adapter,
     );
     switch (outcome) {
@@ -175,6 +179,14 @@ export class WritingCopyController {
         break;
       case "copied":
         this.host.setStatus("copied");
+        if (target) {
+          const text = extractBlockText(target);
+          const fingerprint = await fingerprintText(text);
+          const conversationId = typeof location !== "undefined" ? location.href : "unknown";
+          const turnIndex = 0;
+          const blockIndex = 0;
+          await saveCopiedRecord({ conversationId, turnIndex, blockIndex, fingerprint, copiedAt: Date.now() });
+        }
         break;
       case "unavailable":
       default:
