@@ -16,9 +16,10 @@ import {
   isWritingBlockBackgroundActive,
   WRITING_COPY_ROOT_CLASSES,
 } from "./writing-copy-state.js";
-import { saveCopiedRecord } from "./copied-state-store.js";
+import { saveCopiedRecord, getCopiedRecords, removeCopiedRecord } from "./copied-state-store.js";
 import { fingerprintText } from "./content-fingerprint.js";
 import { extractBlockText } from "./copy-action.js";
+import { deriveBlockIdentity, conversationFingerprintFromLocation } from "./block-identity.js";
 
 /**
  * Writing-copy controller (Phase 4).
@@ -116,6 +117,7 @@ export class WritingCopyController {
     this.tracker.refresh();
     this.applyBackground(settings);
     this.syncHostToTarget();
+    void this.hydrateState();
   }
 
   /** Re-detect and rebind after SPA route change or structural mutation. */
@@ -129,6 +131,33 @@ export class WritingCopyController {
     this.tracker.refresh();
     this.applyBackground(settings);
     this.syncHostToTarget();
+    void this.hydrateState();
+  }
+
+  private async hydrateState(): Promise<void> {
+    const conversationFp = conversationFingerprintFromLocation();
+    if (!conversationFp || conversationFp === "c0") return;
+    const records = await getCopiedRecords(conversationFp);
+    const blocks = findSafeWritingBlocks(this.adapter);
+    for (const block of blocks) {
+      const identity = deriveBlockIdentity(block, this.adapter);
+      if (identity.turnIndex < 0 || identity.blockIndex < 0) continue;
+      try {
+        const text = extractBlockText(block);
+        const fingerprint = await fingerprintText(text);
+        const rec = records.find(r => r.turnIndex === identity.turnIndex && r.blockIndex === identity.blockIndex);
+        if (rec && rec.fingerprint === fingerprint) {
+          block.setAttribute("data-cgl-writing-copy-state", "copied");
+        } else {
+          block.setAttribute("data-cgl-writing-copy-state", "uncopied");
+          if (rec && rec.fingerprint !== fingerprint) {
+            await removeCopiedRecord(conversationFp, identity.turnIndex, identity.blockIndex);
+          }
+        }
+      } catch {
+        block.setAttribute("data-cgl-writing-copy-state", "uncopied");
+      }
+    }
   }
 
   /** Recompute the active target immediately (used before a copy action). */
@@ -180,12 +209,24 @@ export class WritingCopyController {
       case "copied":
         this.host.setStatus("copied");
         if (target) {
-          const text = extractBlockText(target);
-          const fingerprint = await fingerprintText(text);
-          const conversationId = typeof location !== "undefined" ? location.href : "unknown";
-          const turnIndex = 0;
-          const blockIndex = 0;
-          await saveCopiedRecord({ conversationId, turnIndex, blockIndex, fingerprint, copiedAt: Date.now() });
+          try {
+            const conversationFp = conversationFingerprintFromLocation();
+            if (conversationFp && conversationFp !== "c0") {
+              const text = extractBlockText(target);
+              const fingerprint = await fingerprintText(text);
+              const identity = deriveBlockIdentity(target, this.adapter);
+              if (identity.turnIndex >= 0 && identity.blockIndex >= 0) {
+                await saveCopiedRecord(conversationFp, {
+                  turnIndex: identity.turnIndex,
+                  blockIndex: identity.blockIndex,
+                  fingerprint,
+                  copiedAt: Date.now(),
+                });
+              }
+            }
+          } catch {
+            // fail closed on persistence errors
+          }
         }
         break;
       case "unavailable":
