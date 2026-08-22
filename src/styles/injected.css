@@ -179,3 +179,54 @@
     );
   }
 }
+
+/* ---- CGL X-RAY diagnostic paint (maintenance port) ------------------------
+ * TEMPORARY extension-owned diagnostics. Every rule is guarded by the
+ * `cgl-xray-on` root class, which exists ONLY while X-Ray is active; closing
+ * X-Ray removes the class AND every data-cgl-xray-* attribute, so all paint
+ * disappears completely and the official UI is untouched. Colors:
+ * BLUE=Assistant turn, CYAN=conversation/root, YELLOW=raw candidate,
+ * GREEN=safe WritingBlock, RED=rejected candidate, PURPLE=editable,
+ * ORANGE=Copy/Edit/action control, MAGENTA=picked target. */
+
+:root.cgl-xray-on [data-cgl-xray-conversation] {
+  outline: 3px dashed cyan;
+  outline-offset: -3px;
+}
+
+:root.cgl-xray-on [data-cgl-xray-assistant-turn] {
+  outline: 2px solid #4c8dff;
+  outline-offset: -2px;
+}
+
+:root.cgl-xray-on [data-cgl-xray-raw-candidate] {
+  outline: 2px solid #ffd166;
+  background-color: rgba(255, 209, 102, 0.12);
+}
+
+:root.cgl-xray-on [data-cgl-xray-safe-block] {
+  outline: 3px solid #35d07f;
+  outline-offset: -1px;
+  background-color: rgba(53, 208, 127, 0.14);
+}
+
+:root.cgl-xray-on [data-cgl-xray-rejected] {
+  outline: 2px dotted #ff5c5c;
+  background-color: rgba(255, 92, 92, 0.1);
+}
+
+:root.cgl-xray-on [data-cgl-xray-editable] {
+  outline: 2px solid #b28dff;
+  background-color: rgba(178, 141, 255, 0.12);
+}
+
+:root.cgl-xray-on [data-cgl-xray-action] {
+  outline: 2px solid #ff9f43;
+  outline-offset: -1px;
+}
+
+:root.cgl-xray-on [data-cgl-xray-picked] {
+  outline: 4px solid magenta !important;
+  outline-offset: -2px;
+  background-color: rgba(255, 0, 255, 0.15);
+}

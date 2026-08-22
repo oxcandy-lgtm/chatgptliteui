@@ -10,6 +10,10 @@ import { SidebarController } from "../features/sidebar/sidebar-controller.js";
 import { findSafeSidebarTarget, SIDEBAR_HOST_ID } from "../features/sidebar/sidebar-detection.js";
 import { WritingCopyController, WRITING_COPY_HOST_ATTR } from "../features/writing-copy/writing-copy-controller.js";
 import { hasWritingCopyEffects } from "../features/writing-copy/writing-copy-state.js";
+import {
+  XrayController,
+  isXrayShortcut,
+} from "../features/maintenance/xray-controller.js";
 import { logger } from "../shared/logger.js";
 
 /**
@@ -40,6 +44,11 @@ const applier = new ThemeApplier();
 const adapter = createAdapter();
 const sidebarController = new SidebarController(document.documentElement, adapter);
 const writingCopyController = new WritingCopyController(document.documentElement, adapter);
+const xrayController = new XrayController({
+  root: document.documentElement,
+  adapter,
+  getSettings: () => lastSettings,
+});
 const routeListener = new RouteListener();
 
 let observer: MutationObserver | null = null;
@@ -51,6 +60,8 @@ let runtimeEnabled = false;
 let keyboardListenerAttached = false;
 /** Whether the writing-copy keydown listener is currently attached (no dup). */
 let writingCopyListenerAttached = false;
+/** Whether the X-Ray Alt+Shift+X keydown listener is currently attached. */
+let xrayListenerAttached = false;
 /**
  * Observer epoch (Fix 4): every disconnect bumps it. A pending async reconnect
  * from a mutation callback carries the epoch it was issued under; if the epoch
@@ -116,6 +127,13 @@ function syncRuntime(settings: Settings): void {
     writingCopyListenerAttached = false;
   }
 
+  // X-Ray maintenance port: the Alt+Shift+X listener is ALWAYS attached (it
+  // must work even when the extension is disabled). Idempotent attach.
+  if (!xrayListenerAttached) {
+    document.addEventListener("keydown", handleXrayKeydown);
+    xrayListenerAttached = true;
+  }
+
   // Fix 3+4: synchronous connect/disconnect from validated settings.
   if (settings.enabled && hasRuntimeEffects(settings)) {
     connectObserver(settings);
@@ -146,13 +164,14 @@ function reconcileObserver(): void {
   }
 }
 
-/** Whether a node is the extension-owned sidebar/writing-copy control host (ignore it). */
+/** Whether a node is an extension-owned host the observer must ignore. */
 function isExtensionHost(node: Node): boolean {
   return (
     node instanceof HTMLElement &&
     (node.id === SIDEBAR_HOST_ID ||
       node.getAttribute("data-cgl-sidebar-host") === "true" ||
       node.getAttribute(WRITING_COPY_HOST_ATTR) === "true" ||
+      node.getAttribute("data-cgl-xray-host") === "true" ||
       node.tagName.toLowerCase() === "style")
   );
 }
@@ -284,6 +303,7 @@ function teardown(): void {
   disconnectObserver();
   sidebarController.teardown();
   writingCopyController.teardown();
+  xrayController.stop();
   applier.restore();
 }
 
@@ -292,6 +312,7 @@ function reapplyAfterRouteChange(): void {
   applier.restore();
   sidebarController.restore();
   writingCopyController.restore();
+  xrayController.stop(); // X-Ray is page-local; a route change closes it.
   adapter.refresh();
   applyCurrent();
 }
@@ -341,6 +362,35 @@ function handleKeydown(e: KeyboardEvent): void {
   // structural observer is required and connect/disconnect accordingly. This
   // runs synchronously so a freshly hidden/closed sidebar is observed at once.
   reconcileObserver();
+}
+
+/**
+ * Global keydown handler for the X-Ray maintenance shortcut `Alt+Shift+X`.
+ *
+ * Unlike product shortcuts, X-Ray works EVEN when the extension is disabled —
+ * it is a maintenance port, so only repeat/composition/editable-origin safety
+ * checks apply. The controller itself owns the ON/OFF toggle state and the
+ * exact modifier match (Alt+Shift+KeyX, no Ctrl/Meta).
+ */
+function handleXrayKeydown(e: KeyboardEvent): void {
+  if (e.repeat) return;
+  if (e.isComposing || e.key === "Process") return;
+  const t = e.target as Element | null;
+  if (t) {
+    const tag = t.tagName?.toLowerCase();
+    if (
+      tag === "input" ||
+      tag === "textarea" ||
+      tag === "select" ||
+      t.getAttribute("contenteditable") === "true" ||
+      t.getAttribute("role") === "textbox"
+    ) {
+      return;
+    }
+  }
+  if (!isXrayShortcut(e)) return;
+  e.preventDefault();
+  xrayController.handleKeydown();
 }
 
 async function bootstrap(): Promise<void> {
@@ -394,6 +444,7 @@ export {
   adapter,
   sidebarController,
   writingCopyController,
+  xrayController,
   routeListener,
   connectObserver,
   disconnectObserver,
@@ -403,6 +454,7 @@ export {
   scheduleMarkerRefresh,
   pickObserverTarget,
   handleKeydown,
+  handleXrayKeydown,
   hasRuntimeEffects,
 };
 

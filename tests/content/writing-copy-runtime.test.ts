@@ -197,7 +197,8 @@ describe("writing-copy runtime integration", () => {
     expect(mod.writingCopyController.isHostMounted).toBe(false);
     expect(dom.window.document.querySelectorAll('[data-cgl-writing-block="true"]').length).toBe(0);
     const keyLs = listeners.get("keydown") ?? new Set();
-    expect(keyLs.size).toBe(1); // only the sidebar (Alt+L) listener remains
+    // sidebar (Alt+Shift+L) + ALWAYS-ON X-Ray maintenance port (Alt+Shift+X).
+    expect(keyLs.size).toBe(2);
   });
 
   it("repeated sync never duplicates the writing-copy host", async () => {
