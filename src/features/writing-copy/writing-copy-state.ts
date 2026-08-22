@@ -18,12 +18,16 @@ export function isWritingCopyShortcutActive(settings: Settings): boolean {
   );
 }
 
-/** Whether the optional writing-block background should be applied. */
+/**
+ * Whether the optional writing-block background should be applied.
+ * Phase 4: activates under `writingCopy.backgroundEnabled`, independently of
+ * the general custom theme (`appearance.useTheme`).
+ */
 export function isWritingBlockBackgroundActive(settings: Settings): boolean {
   return (
     settings.enabled &&
     settings.writingCopy.enabled &&
-    settings.appearance.useTheme
+    settings.writingCopy.backgroundEnabled
   );
 }
 

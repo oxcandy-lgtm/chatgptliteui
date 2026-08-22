@@ -122,3 +122,27 @@ export async function clearCopiedHistory(
     // ignore
   }
 }
+
+/**
+ * Remove ALL extension-owned copied-state history across every conversation
+ * (Options "Clear copy history" action). Enumerates extension storage keys
+ * ONCE on this explicit user action (`store.get(null)`) and removes only keys
+ * matching the `cgl:writingCopy:history:*` prefix — never
+ * `chrome.storage.local.clear()`, so normal ChatGPTLiteUI settings survive
+ * untouched.
+ */
+export async function clearAllCopiedHistory(): Promise<number> {
+  const store = storage();
+  if (!store) return 0;
+  try {
+    const all = await store.get(null);
+    const historyKeys = Object.keys(all).filter((k) =>
+      k.startsWith(STORAGE_PREFIX),
+    );
+    if (historyKeys.length === 0) return 0;
+    await store.remove(historyKeys);
+    return historyKeys.length;
+  } catch {
+    return 0;
+  }
+}

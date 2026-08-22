@@ -104,11 +104,78 @@
 }
 
 /* ---- writing-block background (Phase 4): guarded, marker-only ------------
- * Applied ONLY when writingCopy is enabled AND useTheme is on. Scoped strictly
- * to the safely detected writing block (marked `data-cgl-writing-block`),
- * never to entire Assistant turns, code blocks, dialogs, composer, sidebar, or
- * low-confidence candidates. The CSS variable is removed on restoration (the
+ * Applied ONLY when writingCopy is enabled AND backgroundEnabled is on —
+ * independently of the general custom theme. Scoped strictly to the safely
+ * detected writing block (marked `data-cgl-writing-block`), never to entire
+ * Assistant turns, code blocks, dialogs, composer, sidebar, or low-confidence
+ * candidates. The CSS variable is removed on restoration (the
  * `cgl-writing-copy-active` class is toggled off by the controller). */
 :root.cgl-writing-copy-active [data-cgl-writing-block] {
   background-color: var(--cgl-writing-bg);
+}
+
+/* ---- copied text marker (Phase 4): CSS Custom Highlight API --------------
+ * `::highlight(cgl-copied)` paints the live Ranges of currently COPIED
+ * WritingBlocks. No spans are created and no ChatGPT DOM is rewritten.
+ * Guarded by the extension-owned root classes; appearance comes entirely
+ * from global presentation variables (never per-record). */
+:root.cgl-writing-marker-on ::highlight(cgl-copied) {
+  background-color: var(--cgl-copy-marker-color);
+  opacity: var(--cgl-copy-marker-opacity);
+  text-decoration: underline;
+  text-decoration-color: var(--cgl-copy-marker-color);
+  text-underline-offset: 3px;
+}
+
+/* ---- uncopied pulse (Phase 4): slow CSS-animation-only background --------
+ * Only UNCOPIED WritingBlocks that are CURRENTLY VISIBLE (extension-owned
+ * `data-cgl-writing-visible` marker from the shared IntersectionObserver)
+ * animate. COPIED blocks never pulse. One animation, no per-block timers,
+ * no JS loop. */
+:root.cgl-writing-pulse-on [data-cgl-writing-block][data-cgl-writing-copy-state="uncopied"][data-cgl-writing-visible] {
+  animation: cgl-writing-pulse var(--cgl-pulse-period) ease-in-out infinite;
+}
+
+@keyframes cgl-writing-pulse {
+  0%,
+  100% {
+    background-color: transparent;
+  }
+  50% {
+    background-color: color-mix(
+      in srgb,
+      var(--cgl-pulse-color) calc(var(--cgl-pulse-intensity) * 100%),
+      transparent
+    );
+  }
+}
+
+/* COPIED blocks must never pulse, even if a stale visible marker remains. */
+:root.cgl-writing-pulse-on [data-cgl-writing-block][data-cgl-writing-copy-state="copied"] {
+  animation: none;
+}
+
+/* ---- reduced motion: static high-visibility fallback ---------------------
+ * Honors BOTH ChatGPTLiteUI's own animation-reduction toggle and the OS-level
+ * preference. The pulse stops and UNCOPIED blocks keep a static tint instead;
+ * the copied marker itself is static and remains untouched by these rules. */
+:root.cgl-no-anim.cgl-writing-pulse-on [data-cgl-writing-block][data-cgl-writing-copy-state="uncopied"],
+:root.cgl-no-anim.cgl-writing-pulse-on [data-cgl-writing-block][data-cgl-writing-copy-state="uncopied"][data-cgl-writing-visible] {
+  animation: none !important;
+  background-color: color-mix(
+    in srgb,
+    var(--cgl-pulse-color) calc(var(--cgl-pulse-intensity) * 50%),
+    transparent
+  );
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root.cgl-writing-pulse-on [data-cgl-writing-block][data-cgl-writing-copy-state="uncopied"] {
+    animation: none !important;
+    background-color: color-mix(
+      in srgb,
+      var(--cgl-pulse-color) calc(var(--cgl-pulse-intensity) * 50%),
+      transparent
+    );
+  }
 }

@@ -120,7 +120,7 @@ describe("sidebar content runtime + keyboard", () => {
     const chromeStub = {
       storage: {
         local: {
-          get: (k: string) => Promise.resolve({ [k]: { schemaVersion: 2, settings: lastEnv } }),
+          get: (k: string) => Promise.resolve({ [k]: { schemaVersion: 3, settings: lastEnv } }),
           set: (_v: unknown) => Promise.resolve(),
         },
         onChanged: { addListener: (cb: (changes: Record<string, unknown>, area: string) => void) => {
@@ -440,7 +440,7 @@ describe("sidebar content runtime + keyboard", () => {
   function fireStorageChange(next: Settings): Promise<void> {
     setEnv(next);
     const cbs = (mod as unknown as { __onChanged: ((c: Record<string, unknown>, a: string) => void)[] }).__onChanged;
-    for (const cb of cbs) cb({ settings: { newValue: { schemaVersion: 2, settings: next } } }, "local");
+    for (const cb of cbs) cb({ settings: { newValue: { schemaVersion: 3, settings: next } } }, "local");
     return new Promise((r) => setTimeout(r, 20));
   }
 

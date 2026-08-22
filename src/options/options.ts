@@ -5,6 +5,7 @@ import {
   detectAppearancePreset,
 } from "../features/appearance/presets.js";
 import { isAllowedColor } from "../settings/schema.js";
+import { clearAllCopiedHistory } from "../features/writing-copy/copied-state-store.js";
 
 /** Theme color fields exposed in the UI (writingBlockBackground is reserved). */
 const COLOR_FIELDS = [
@@ -70,14 +71,24 @@ function readForm(current: Settings): Partial<Settings> {
     theme[f] = value;
   }
   theme.assistantBackground = assistantBackground;
-  // Writing-block background is now an editable theme field (Phase 4), but its
-  // saved value is still preserved from the freshly loaded `current` to avoid
-  // clobbering concurrent edits; here we read it from the form when present.
+  // Writing-block background is edited in the Writing Copy / CopyMarker
+  // section; its saved value comes from that form input when present and
+  // valid, otherwise the current stored value is preserved.
   const wbb = el<HTMLInputElement>("writingBlockBackground").value.trim();
   if (isAllowedColor(wbb)) {
     theme.writingBlockBackground = wbb;
   } else {
     theme.writingBlockBackground = current.theme.writingBlockBackground;
+  }
+
+  // Writing Copy / CopyMarker section (Phase 4).
+  const markerColor = el<HTMLInputElement>("writingCopyMarkerColor").value.trim();
+  if (!isAllowedColor(markerColor) || markerColor === "transparent") {
+    throw new Error("invalid color for writingCopyMarkerColor");
+  }
+  const pulseColor = el<HTMLInputElement>("writingCopyPulseColor").value.trim();
+  if (!isAllowedColor(pulseColor) || pulseColor === "transparent") {
+    throw new Error("invalid color for writingCopyPulseColor");
   }
 
   // Derive the preset from the fresh current value plus the newly read
@@ -89,11 +100,7 @@ function readForm(current: Settings): Partial<Settings> {
     appearance,
     theme,
     sidebar: { mode: sidebarMode },
-    writingCopy: {
-      enabled: el<HTMLInputElement>("writingCopyEnabled").checked,
-      position: el<HTMLSelectElement>("writingCopyPosition").value as Settings["writingCopy"]["position"],
-      shortcutEnabled: el<HTMLInputElement>("writingCopyShortcut").checked,
-    },
+    writingCopy: readWritingCopyForm(markerColor, pulseColor),
   };
   const derived = detectAppearancePreset(merged);
 
@@ -103,11 +110,28 @@ function readForm(current: Settings): Partial<Settings> {
     appearance,
     theme,
     sidebar: { mode: sidebarMode },
-    writingCopy: {
-      enabled: el<HTMLInputElement>("writingCopyEnabled").checked,
-      position: el<HTMLSelectElement>("writingCopyPosition").value as Settings["writingCopy"]["position"],
-      shortcutEnabled: el<HTMLInputElement>("writingCopyShortcut").checked,
-    },
+    writingCopy: readWritingCopyForm(markerColor, pulseColor),
+  };
+}
+
+/** Read the Writing Copy / CopyMarker form controls into the section object. */
+function readWritingCopyForm(
+  markerColor: string,
+  pulseColor: string,
+): Settings["writingCopy"] {
+  return {
+    enabled: el<HTMLInputElement>("writingCopyEnabled").checked,
+    position: el<HTMLSelectElement>("writingCopyPosition")
+      .value as Settings["writingCopy"]["position"],
+    shortcutEnabled: el<HTMLInputElement>("writingCopyShortcut").checked,
+    markerEnabled: el<HTMLInputElement>("writingCopyMarkerEnabled").checked,
+    markerColor,
+    markerOpacity: Number(el<HTMLInputElement>("writingCopyMarkerOpacity").value),
+    pulseEnabled: el<HTMLInputElement>("writingCopyPulseEnabled").checked,
+    pulseColor,
+    pulseIntensity: Number(el<HTMLInputElement>("writingCopyPulseIntensity").value),
+    pulsePeriodMs: Number(el<HTMLInputElement>("writingCopyPulsePeriod").value),
+    backgroundEnabled: el<HTMLInputElement>("writingCopyBackgroundEnabled").checked,
   };
 }
 
@@ -115,9 +139,18 @@ function writeForm(settings: Settings): void {
   el<HTMLInputElement>("enabled").checked = settings.enabled;
   el<HTMLSelectElement>("preset").value = settings.preset;
   el<HTMLSelectElement>("sidebarMode").value = settings.sidebar.mode;
-  el<HTMLInputElement>("writingCopyEnabled").checked = settings.writingCopy.enabled;
-  el<HTMLSelectElement>("writingCopyPosition").value = settings.writingCopy.position;
-  el<HTMLInputElement>("writingCopyShortcut").checked = settings.writingCopy.shortcutEnabled;
+  const w = settings.writingCopy;
+  el<HTMLInputElement>("writingCopyEnabled").checked = w.enabled;
+  el<HTMLSelectElement>("writingCopyPosition").value = w.position;
+  el<HTMLInputElement>("writingCopyShortcut").checked = w.shortcutEnabled;
+  el<HTMLInputElement>("writingCopyMarkerEnabled").checked = w.markerEnabled;
+  el<HTMLInputElement>("writingCopyMarkerColor").value = w.markerColor;
+  el<HTMLInputElement>("writingCopyMarkerOpacity").value = String(w.markerOpacity);
+  el<HTMLInputElement>("writingCopyPulseEnabled").checked = w.pulseEnabled;
+  el<HTMLInputElement>("writingCopyPulseColor").value = w.pulseColor;
+  el<HTMLInputElement>("writingCopyPulseIntensity").value = String(w.pulseIntensity);
+  el<HTMLInputElement>("writingCopyPulsePeriod").value = String(w.pulsePeriodMs);
+  el<HTMLInputElement>("writingCopyBackgroundEnabled").checked = w.backgroundEnabled;
   const a = settings.appearance;
   el<HTMLInputElement>("disableAnimations").checked = a.disableAnimations;
   el<HTMLInputElement>("disableBlur").checked = a.disableBlur;
@@ -272,6 +305,20 @@ function bind(): void {
         .catch(() => {
           status.textContent = "Failed to restore official UI.";
         });
+    });
+  });
+
+  // Clear copy history: explicit user action removing ONLY extension-owned
+  // `cgl:writingCopy:history:*` keys across every conversation. Settings and
+  // all other extension data are never touched.
+  el<HTMLButtonElement>("clearCopyHistory").addEventListener("click", () => {
+    void clearAllCopiedHistory().then((removed) => {
+      status.textContent =
+        removed > 0
+          ? `Cleared copied-state history (${removed} conversation${removed === 1 ? "" : "s"}).`
+          : "No copied history to clear.";
+    }).catch(() => {
+      status.textContent = "Failed to clear copy history.";
     });
   });
 }

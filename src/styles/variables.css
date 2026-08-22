@@ -20,4 +20,12 @@
 
   /* Compact spacing multiplier (applied only under .cgl-compact). */
   --cgl-spacing-scale: 0.75;
+
+  /* Writing Copy / CopyMarker presentation (Phase 4). Overridden at runtime
+   * from settings; global presentation state only — never per copied record. */
+  --cgl-copy-marker-color: #4c8dff;
+  --cgl-copy-marker-opacity: 0.3;
+  --cgl-pulse-color: #4c8dff;
+  --cgl-pulse-intensity: 0.18;
+  --cgl-pulse-period: 4000ms;
 }

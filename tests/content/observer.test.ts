@@ -75,7 +75,7 @@ describe("Scoped mutation observer + route lifecycle (Fix 1/2)", () => {
   let lastEnv: StoredSettingsEnvelope;
 
   function setEnv(settings: Settings): void {
-    lastEnv = { schemaVersion: 2, settings };
+    lastEnv = { schemaVersion: 3, settings };
   }
 
   beforeEach(async () => {

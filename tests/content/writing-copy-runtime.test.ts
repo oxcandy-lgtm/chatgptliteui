@@ -128,7 +128,7 @@ describe("writing-copy runtime integration", () => {
     const chromeStub = {
       storage: {
         local: {
-          get: (k: string) => Promise.resolve({ [k]: { schemaVersion: 2, settings: lastEnv } }),
+          get: (k: string) => Promise.resolve({ [k]: { schemaVersion: 3, settings: lastEnv } }),
           set: () => Promise.resolve(),
         },
         onChanged: { addListener: () => {} },
@@ -141,7 +141,7 @@ describe("writing-copy runtime integration", () => {
 
   it("writing-copy alone activates the shared structural observer", async () => {
     await setup();
-    const s = makeSettings({ appearance: cloneDefaults().appearance, sidebar: { mode: "visible" }, writingCopy: { enabled: true, position: "middle-right", shortcutEnabled: true } });
+    const s = makeSettings({ appearance: cloneDefaults().appearance, sidebar: { mode: "visible" }, writingCopy: { ...cloneDefaults().writingCopy, enabled: true, position: "middle-right", shortcutEnabled: true } });
     mod.syncRuntime(s);
     await new Promise((r) => setTimeout(r, 0));
     expect(FakeMutationObserver.last).not.toBeNull();
@@ -149,7 +149,7 @@ describe("writing-copy runtime integration", () => {
 
   it("writing-copy disabled does not activate it by itself", async () => {
     await setup();
-    const s = makeSettings({ appearance: cloneDefaults().appearance, sidebar: { mode: "visible" }, writingCopy: { enabled: false, position: "middle-right", shortcutEnabled: true } });
+    const s = makeSettings({ appearance: cloneDefaults().appearance, sidebar: { mode: "visible" }, writingCopy: { ...cloneDefaults().writingCopy, enabled: false, position: "middle-right", shortcutEnabled: true } });
     mod.syncRuntime(s);
     await new Promise((r) => setTimeout(r, 0));
     expect(FakeMutationObserver.last).toBeNull();
@@ -157,7 +157,7 @@ describe("writing-copy runtime integration", () => {
 
   it("new Assistant block is discovered after mutation", async () => {
     await setup();
-    const s = makeSettings({ sidebar: { mode: "visible" }, writingCopy: { enabled: true, position: "middle-right", shortcutEnabled: true } });
+    const s = makeSettings({ sidebar: { mode: "visible" }, writingCopy: { ...cloneDefaults().writingCopy, enabled: true, position: "middle-right", shortcutEnabled: true } });
     mod.syncRuntime(s);
     await new Promise((r) => setTimeout(r, 0));
     expect(mod.writingCopyController.isHostMounted).toBe(true);
@@ -174,7 +174,7 @@ describe("writing-copy runtime integration", () => {
 
   it("host mutation does not create a refresh loop", async () => {
     await setup();
-    const s = makeSettings({ sidebar: { mode: "visible" }, writingCopy: { enabled: true, position: "middle-right", shortcutEnabled: true } });
+    const s = makeSettings({ sidebar: { mode: "visible" }, writingCopy: { ...cloneDefaults().writingCopy, enabled: true, position: "middle-right", shortcutEnabled: true } });
     mod.syncRuntime(s);
     await new Promise((r) => setTimeout(r, 0));
     const host = dom.window.document.querySelector('[data-cgl-writing-copy-host="true"]')!;
@@ -187,11 +187,11 @@ describe("writing-copy runtime integration", () => {
 
   it("disable writing-copy removes marker/host/shortcut/IO", async () => {
     await setup();
-    const on = makeSettings({ sidebar: { mode: "visible" }, writingCopy: { enabled: true, position: "middle-right", shortcutEnabled: true } });
+    const on = makeSettings({ sidebar: { mode: "visible" }, writingCopy: { ...cloneDefaults().writingCopy, enabled: true, position: "middle-right", shortcutEnabled: true } });
     mod.syncRuntime(on);
     await new Promise((r) => setTimeout(r, 0));
     expect(mod.writingCopyController.isHostMounted).toBe(true);
-    const off = makeSettings({ sidebar: { mode: "visible" }, writingCopy: { enabled: false, position: "middle-right", shortcutEnabled: true } });
+    const off = makeSettings({ sidebar: { mode: "visible" }, writingCopy: { ...cloneDefaults().writingCopy, enabled: false, position: "middle-right", shortcutEnabled: true } });
     mod.syncRuntime(off);
     await new Promise((r) => setTimeout(r, 0));
     expect(mod.writingCopyController.isHostMounted).toBe(false);
@@ -202,7 +202,7 @@ describe("writing-copy runtime integration", () => {
 
   it("repeated sync never duplicates the writing-copy host", async () => {
     await setup();
-    const s = makeSettings({ sidebar: { mode: "visible" }, writingCopy: { enabled: true, position: "middle-right", shortcutEnabled: true } });
+    const s = makeSettings({ sidebar: { mode: "visible" }, writingCopy: { ...cloneDefaults().writingCopy, enabled: true, position: "middle-right", shortcutEnabled: true } });
     mod.syncRuntime(s);
     mod.syncRuntime(s);
     mod.syncRuntime(s);
@@ -213,7 +213,7 @@ describe("writing-copy runtime integration", () => {
   it("missing safe conversation container mounts no host", async () => {
     await setup();
     dom.window.document.querySelector("main")!.remove();
-    const s = makeSettings({ sidebar: { mode: "visible" }, writingCopy: { enabled: true, position: "middle-right", shortcutEnabled: true } });
+    const s = makeSettings({ sidebar: { mode: "visible" }, writingCopy: { ...cloneDefaults().writingCopy, enabled: true, position: "middle-right", shortcutEnabled: true } });
     mod.syncRuntime(s);
     await new Promise((r) => setTimeout(r, 0));
     expect(mod.writingCopyController.isHostMounted).toBe(false);

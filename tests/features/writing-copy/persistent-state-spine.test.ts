@@ -104,6 +104,7 @@ function makeSettings(): Settings {
   const s = cloneDefaults();
   s.enabled = true;
   s.writingCopy = {
+    ...s.writingCopy,
     enabled: true,
     position: "middle-right",
     shortcutEnabled: true,

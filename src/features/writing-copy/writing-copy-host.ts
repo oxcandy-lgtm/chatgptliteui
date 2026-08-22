@@ -135,8 +135,19 @@ export class WritingCopyHost {
     this.host.setAttribute("data-visible", visible ? "true" : "false");
   }
 
-  /** Position the host against the active block's right edge. */
-  positionAgainst(block: HTMLElement, mode: "top-right" | "middle-right" | "bottom-right"): void {
+  /**
+   * Position the host against the active block's right edge.
+   *
+   * `smart` mode: prefer just OUTSIDE the block's right edge; fall back to
+   * inside-right when there is insufficient horizontal room; clamp the
+   * complete button bounds within the visible viewport margins (preferring
+   * `window.visualViewport` when available) and keep Y aligned usefully with
+   * the active block, never offscreen.
+   */
+  positionAgainst(
+    block: HTMLElement,
+    mode: "smart" | "top-right" | "middle-right" | "bottom-right",
+  ): void {
     if (!this.host) return;
     const rect = block.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) {
@@ -147,8 +158,12 @@ export class WritingCopyHost {
     const hostW = hostRect.width || 80;
     const hostH = hostRect.height || 32;
     const margin = 6;
-    const vw = window.innerWidth || 0;
-    const vh = window.innerHeight || 0;
+
+    const vv = (globalThis as unknown as {
+      visualViewport?: { width: number; height: number };
+    }).visualViewport;
+    const vw = Math.round(vv?.width ?? window.innerWidth ?? 0);
+    const vh = Math.round(vv?.height ?? window.innerHeight ?? 0);
 
     let top: number;
     switch (mode) {
@@ -158,6 +173,12 @@ export class WritingCopyHost {
       case "bottom-right":
         top = rect.bottom - hostH;
         break;
+      case "smart": {
+        // Align usefully with the block: middle, clamped fully onscreen.
+        const mid = rect.top + rect.height / 2 - hostH / 2;
+        top = Math.max(margin, Math.min(mid, vh - hostH - margin));
+        break;
+      }
       case "middle-right":
       default:
         top = rect.top + rect.height / 2 - hostH / 2;
@@ -166,7 +187,11 @@ export class WritingCopyHost {
 
     // Pin to the right edge of the block, clamped inside the viewport.
     let left = rect.right + margin;
-    if (left + hostW > vw - margin) left = rect.right - hostW - margin;
+    const fitsOutside = left + hostW <= vw - margin;
+    if (!fitsOutside && mode === "smart") {
+      // Insufficient horizontal room: place it INSIDE the block's right edge.
+      left = rect.right - hostW - margin;
+    }
     left = Math.max(margin, Math.min(left, vw - hostW - margin));
     top = Math.max(margin, Math.min(top, vh - hostH - margin));
 

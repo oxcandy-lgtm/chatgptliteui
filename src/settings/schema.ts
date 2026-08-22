@@ -49,7 +49,7 @@ function isBoundedInt(
 const PRESETS = new Set(["normal", "minimal", "work", "ultra-lite", "custom"]);
 const SIDEBAR_MODES = new Set(["visible", "hover", "button", "hidden"]);
 const HISTORY_MODES = new Set(["safe", "aggressive"]);
-const COPY_POSITIONS = new Set(["top-right", "middle-right", "bottom-right"]);
+const COPY_POSITIONS = new Set(["smart", "top-right", "middle-right", "bottom-right"]);
 
 function assertNoExtraKeys(
   obj: Record<string, unknown>,
@@ -125,13 +125,43 @@ function validateHistory(value: unknown): value is Settings["history"] {
 
 function validateWritingCopy(value: unknown): value is Settings["writingCopy"] {
   if (!isObject(value)) return false;
-  const allowed = new Set(["enabled", "position", "shortcutEnabled"]);
+  const allowed = new Set([
+    "enabled",
+    "position",
+    "shortcutEnabled",
+    "markerEnabled",
+    "markerColor",
+    "markerOpacity",
+    "pulseEnabled",
+    "pulseColor",
+    "pulseIntensity",
+    "pulsePeriodMs",
+    "backgroundEnabled",
+  ]);
   if (!assertNoExtraKeys(value, allowed)) return false;
   if (!isBoolean(value.enabled)) return false;
   if (typeof value.position !== "string" || !COPY_POSITIONS.has(value.position)) {
     return false;
   }
-  return isBoolean(value.shortcutEnabled);
+  if (!isBoolean(value.shortcutEnabled)) return false;
+  if (!isBoolean(value.markerEnabled)) return false;
+  if (!isAllowedColor(value.markerColor) || value.markerColor === "transparent") {
+    return false;
+  }
+  if (!isBoundedInt(value.markerOpacity, NUMBER_BOUNDS.markerOpacity.min, NUMBER_BOUNDS.markerOpacity.max)) {
+    return false;
+  }
+  if (!isBoolean(value.pulseEnabled)) return false;
+  if (!isAllowedColor(value.pulseColor) || value.pulseColor === "transparent") {
+    return false;
+  }
+  if (!isBoundedInt(value.pulseIntensity, NUMBER_BOUNDS.pulseIntensity.min, NUMBER_BOUNDS.pulseIntensity.max)) {
+    return false;
+  }
+  if (!isBoundedInt(value.pulsePeriodMs, NUMBER_BOUNDS.pulsePeriodMs.min, NUMBER_BOUNDS.pulsePeriodMs.max)) {
+    return false;
+  }
+  return isBoolean(value.backgroundEnabled);
 }
 
 function validateCodeBlocks(value: unknown): value is Settings["codeBlocks"] {
@@ -274,6 +304,36 @@ export function mergeSettings(
       next.writingCopy.position = w.position;
     }
     if (isBoolean(w.shortcutEnabled)) next.writingCopy.shortcutEnabled = w.shortcutEnabled;
+    if (isBoolean(w.markerEnabled)) next.writingCopy.markerEnabled = w.markerEnabled;
+    if (
+      isAllowedColor(w.markerColor) &&
+      w.markerColor !== "transparent"
+    ) {
+      next.writingCopy.markerColor = w.markerColor;
+    }
+    if (
+      isBoundedInt(w.markerOpacity, NUMBER_BOUNDS.markerOpacity.min, NUMBER_BOUNDS.markerOpacity.max)
+    ) {
+      next.writingCopy.markerOpacity = w.markerOpacity;
+    }
+    if (isBoolean(w.pulseEnabled)) next.writingCopy.pulseEnabled = w.pulseEnabled;
+    if (
+      isAllowedColor(w.pulseColor) &&
+      w.pulseColor !== "transparent"
+    ) {
+      next.writingCopy.pulseColor = w.pulseColor;
+    }
+    if (
+      isBoundedInt(w.pulseIntensity, NUMBER_BOUNDS.pulseIntensity.min, NUMBER_BOUNDS.pulseIntensity.max)
+    ) {
+      next.writingCopy.pulseIntensity = w.pulseIntensity;
+    }
+    if (
+      isBoundedInt(w.pulsePeriodMs, NUMBER_BOUNDS.pulsePeriodMs.min, NUMBER_BOUNDS.pulsePeriodMs.max)
+    ) {
+      next.writingCopy.pulsePeriodMs = w.pulsePeriodMs;
+    }
+    if (isBoolean(w.backgroundEnabled)) next.writingCopy.backgroundEnabled = w.backgroundEnabled;
   }
   if (isObject(patch.codeBlocks)) {
     const c = patch.codeBlocks;

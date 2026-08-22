@@ -26,6 +26,22 @@ export interface TrackedTarget {
 
 export type ActiveTargetChange = (target: HTMLElement | null) => void;
 
+/** Callback fired after every recalculation pass (target may be unchanged). */
+export type RecalculateCallback = () => void;
+
+/** Extension-owned visibility marker for pulse performance gating. */
+const MARKER_WRITING_VISIBLE = "data-cgl-writing-visible";
+
+/**
+ * Set/clear the extension-owned visibility marker on a candidate.
+ * The pulse animation is gated on this marker so only currently visible
+ * WritingBlocks animate.
+ */
+function setVisibilityMarker(el: HTMLElement, visible: boolean): void {
+  if (visible) el.setAttribute(MARKER_WRITING_VISIBLE, "true");
+  else el.removeAttribute(MARKER_WRITING_VISIBLE);
+}
+
 function rectCenterDistance(rect: DOMRect): number {
   const blockCenterY = rect.top + rect.height / 2;
   const viewportCenterY = (window.innerHeight || 0) / 2;
@@ -47,6 +63,7 @@ export class WritingCopyTracker {
   private active: HTMLElement | null = null;
   private rafId: number | null = null;
   private onChange: ActiveTargetChange | null = null;
+  private onRecalculate: RecalculateCallback | null = null;
   private readonly boundScroll: () => void;
   private readonly boundResize: () => void;
 
@@ -62,11 +79,24 @@ export class WritingCopyTracker {
   }
 
   /**
+   * Provide a callback invoked after every recalculation pass, even when the
+   * active target did not change (used by the visual layer for cheap
+   * presentation reconciliation).
+   */
+  setOnRecalculate(cb: RecalculateCallback): void {
+    this.onRecalculate = cb;
+  }
+
+  /**
    * Re-scan the DOM for safe candidates, rebuild the candidate set, (re)attach
    * the IntersectionObserver, and immediately recalculate the active target.
    */
   refresh(): void {
     this.teardownObserver();
+    // Clear stale visibility markers before rebuilding the candidate set.
+    document.querySelectorAll(`[${MARKER_WRITING_VISIBLE}]`).forEach((el) => {
+      el.removeAttribute(MARKER_WRITING_VISIBLE);
+    });
     const found = findSafeWritingBlocks(this.adapter).filter(
       (el) => el.isConnected,
     );
@@ -74,11 +104,16 @@ export class WritingCopyTracker {
 
     if (typeof IntersectionObserver !== "undefined" && this.candidates.size > 0) {
       this.observer = new IntersectionObserver(
-        () => {
-          // Keep only still-intersecting, connected candidates. The observer
-          // callback receives entries; we trust the browser's intersection
-          // state but also re-validate connectivity to be safe under jsdom
-          // (where IntersectionObserver may be a no-op stub).
+        (entries) => {
+          // Maintain extension-owned visibility markers so CSS can gate the
+          // pulse animation to currently visible blocks only. The callback
+          // also re-validates connectivity to be safe under jsdom (where
+          // IntersectionObserver may be a no-op stub).
+          for (const entry of entries) {
+            const el = entry.target as HTMLElement;
+            if (!el.isConnected) continue;
+            setVisibilityMarker(el, entry.isIntersecting);
+          }
           this.recalculate();
         },
         { threshold: 0 },
@@ -163,6 +198,7 @@ export class WritingCopyTracker {
       this.active = best;
       this.onChange?.(best);
     }
+    this.onRecalculate?.();
   }
 
   /** rAF-throttled recalculation entry point. */
@@ -186,7 +222,7 @@ export class WritingCopyTracker {
     }
   }
 
-  /** Release all candidate/target references and listeners. */
+  /** Release all candidate/target references, listeners, and markers. */
   teardown(): void {
     this.teardownObserver();
     window.removeEventListener("scroll", this.boundScroll);
@@ -199,10 +235,18 @@ export class WritingCopyTracker {
       caf(this.rafId as unknown as number);
       this.rafId = null;
     }
+    // Release extension-owned visibility markers so no pulse gating survives
+    // teardown.
+    document.querySelectorAll(`[${MARKER_WRITING_VISIBLE}]`).forEach((el) => {
+      el.removeAttribute(MARKER_WRITING_VISIBLE);
+    });
     this.candidates.clear();
     this.active = null;
+    this.onRecalculate = null;
   }
 }
+
+export { MARKER_WRITING_VISIBLE as WRITING_VISIBLE_MARKER };
 
 function domOrder(el: HTMLElement, ordered: HTMLElement[]): number {
   const idx = ordered.indexOf(el);

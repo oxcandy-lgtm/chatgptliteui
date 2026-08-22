@@ -58,7 +58,7 @@ function keyEvent(
 function makeSettings(over: Partial<Settings["writingCopy"]>): Settings {
   const s = cloneDefaults();
   s.enabled = true;
-  s.writingCopy = { enabled: false, position: "middle-right", shortcutEnabled: true, ...over };
+  s.writingCopy = { ...s.writingCopy, enabled: false, position: "middle-right", shortcutEnabled: true, ...over };
   return s;
 }
 

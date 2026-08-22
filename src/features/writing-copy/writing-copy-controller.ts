@@ -12,11 +12,7 @@ import {
   clearAllWritingCopyMarkers,
   setWritingCopyState,
 } from "./writing-copy-markers.js";
-import {
-  hasWritingCopyEffects,
-  isWritingBlockBackgroundActive,
-  WRITING_COPY_ROOT_CLASSES,
-} from "./writing-copy-state.js";
+import { WRITING_COPY_ROOT_CLASSES } from "./writing-copy-state.js";
 import { saveCopiedRecord, getCopiedRecords, removeCopiedRecord } from "./copied-state-store.js";
 import { fingerprintText } from "./content-fingerprint.js";
 import { extractBlockText } from "./copy-action.js";
@@ -24,6 +20,7 @@ import {
   deriveBlockIdentity,
   conversationFingerprintFromLocation,
 } from "./block-identity.js";
+import { WritingCopyVisualState } from "./writing-copy-visual-state.js";
 
 /**
  * Writing-copy controller (Phase 4).
@@ -31,9 +28,9 @@ import {
  * Strictly non-destructive. The ONLY permitted mutations on a detected ChatGPT
  * writing block are TWO extension-owned attributes: the boolean marker
  * (`data-cgl-writing-block="true"`) and the semantic state marker
- * (`data-cgl-writing-copy-state="copied|uncopied"`), plus an optional guarded
- * background color scoped to the boolean marker under the
- * `cgl-writing-copy-active` root class.
+ * (`data-cgl-writing-copy-state="copied|uncopied"`), plus the extension-owned
+ * visibility marker maintained by the tracker and an optional guarded
+ * background color scoped to the boolean marker under root classes.
  *
  * Responsibilities:
  *  - track the most viewport-centered safe Assistant writing block;
@@ -44,11 +41,14 @@ import {
  *    durable save succeed, then immediately reflect the semantic COPIED state;
  *  - hydrate persisted copied state with an epoch guard so a stale hydration
  *    can never apply across route switches, disables, restores, or teardowns;
+ *  - drive the separate VISUAL layer (copied Highlight marker + pulse
+ *    presentation) from the authoritative semantic state;
  *  - never read the clipboard, never store/log/transmit copied text;
  *  - completely restore the official UI when disabled or torn down.
  *
- * The controller owns its own tracker, host, and keyboard handler. The content
- * runtime drives `apply`/`refresh`/`teardown` and forwards the shortcut.
+ * The controller owns its own tracker, host, visual state, and keyboard
+ * handler. The content runtime drives `apply`/`refresh`/`teardown` and
+ * forwards the shortcut.
  */
 
 export const WRITING_COPY_HOST_ATTR = HOST_ATTR;
@@ -58,9 +58,10 @@ export class WritingCopyController {
   private readonly adapter: ChatGptAdapter;
   private readonly tracker: WritingCopyTracker;
   private readonly host: WritingCopyHost;
+  private readonly visuals: WritingCopyVisualState;
 
   private enabled = false;
-  private position: CopyPosition = "middle-right";
+  private position: CopyPosition = "smart";
   private activeBlock: HTMLElement | null = null;
   /**
    * Hydration epoch (race guard): every restore/teardown and every new
@@ -68,6 +69,18 @@ export class WritingCopyController {
    * applies state or deletes records only while its epoch is still current.
    */
   private hydrationEpoch = 0;
+
+  /** One ResizeObserver for the CURRENT active target only. */
+  private activeResizeObserver: ResizeObserver | null = null;
+  /** Observed element behind activeResizeObserver; released on teardown. */
+  private observedActive: HTMLElement | null = null;
+  /** rAF-coalesced geometry update id. */
+  private geometryRaf: number | null = null;
+  private readonly boundGeometryUpdate = (): void => this.scheduleGeometryUpdate();
+  private readonly boundVvScroll = (): void => this.scheduleGeometryUpdate();
+  private readonly boundVvResize = (): void => this.scheduleGeometryUpdate();
+  private geometryListenersAttached = false;
+  private vvListenersAttached = false;
 
   /** Bound keyboard handler (single reference reused for attach/detach). */
   private readonly keyHandler: (e: KeyboardEvent) => void;
@@ -77,12 +90,17 @@ export class WritingCopyController {
     this.adapter = adapter;
     this.tracker = new WritingCopyTracker(adapter);
     this.host = new WritingCopyHost();
+    this.visuals = new WritingCopyVisualState(root);
 
     const onChange: ActiveTargetChange = (target) => {
       this.activeBlock = target;
       this.syncHostToTarget();
+      this.observeActiveTarget(target);
     };
     this.tracker.setOnChange(onChange);
+    // Cheap post-pass reconciliation of the visual layer after every
+    // recalculation (also fires when the target is unchanged).
+    this.tracker.setOnRecalculate(() => void this.reconcileVisuals());
     this.keyHandler = (e: KeyboardEvent): void => this.handleKeydown(e);
   }
 
@@ -104,12 +122,16 @@ export class WritingCopyController {
     return this.tracker.candidatesList;
   }
 
+  get visualLayer(): WritingCopyVisualState {
+    return this.visuals;
+  }
+
   // --- apply / refresh / restore ------------------------------------------
 
   /**
    * Apply writing-copy settings. No-op (official UI untouched) when disabled.
-   * Otherwise re-detect safe blocks, mark them, mount the host, and begin
-   * tracking the most viewport-centered block.
+   * Otherwise re-detect safe blocks, mark them, mount the host, begin
+   * tracking the most viewport-centered block, and reconcile the visual layer.
    */
   apply(settings: Settings): void {
     this.restore();
@@ -118,6 +140,7 @@ export class WritingCopyController {
 
     if (!this.enabled) {
       this.activeBlock = null;
+      this.visuals.applyPresentation(settings);
       return;
     }
 
@@ -125,15 +148,18 @@ export class WritingCopyController {
     // host must not be mounted (spec: missing container mounts no host).
     if (!this.adapter.detectConversationContainer().element) {
       this.activeBlock = null;
+      this.visuals.applyPresentation(settings);
       return;
     }
 
     this.markSafeBlocks();
-    this.host.mount(() => void this.onCopyRequested());
-    this.tracker.refresh();
+    this.visuals.applyPresentation(settings);
     this.applyBackground(settings);
+    this.host.mount(() => void this.onCopyRequested());
+    this.attachGeometryListeners(settings);
+    this.tracker.refresh();
     this.syncHostToTarget();
-    void this.hydrateState();
+    void this.hydrateState().then(() => this.reconcileVisuals());
   }
 
   /** Re-detect and rebind after SPA route change or structural mutation. */
@@ -144,10 +170,11 @@ export class WritingCopyController {
       return;
     }
     this.markSafeBlocks();
-    this.tracker.refresh();
+    this.visuals.applyPresentation(settings);
     this.applyBackground(settings);
+    this.tracker.refresh();
     this.syncHostToTarget();
-    void this.hydrateState();
+    void this.hydrateState().then(() => this.reconcileVisuals());
   }
 
   private async hydrateState(): Promise<void> {
@@ -217,13 +244,121 @@ export class WritingCopyController {
     this.host.setStatus("none");
   }
 
-  /** Apply the optional guarded writing-block background. */
+  /**
+   * Apply the optional guarded writing-block background INDEPENDENTLY of the
+   * general custom theme: it activates under writingCopy.backgroundEnabled.
+   */
   private applyBackground(settings: Settings): void {
-    if (isWritingBlockBackgroundActive(settings)) {
+    if (
+      settings.enabled &&
+      settings.writingCopy.enabled &&
+      settings.writingCopy.backgroundEnabled
+    ) {
       this.root.classList.add("cgl-writing-copy-active");
+      this.root.style.setProperty(
+        "--cgl-writing-bg",
+        settings.theme.writingBlockBackground,
+      );
     } else {
       this.root.classList.remove("cgl-writing-copy-active");
+      this.root.style.removeProperty("--cgl-writing-bg");
     }
+  }
+
+  // --- visual layer --------------------------------------------------------
+
+  /** Reconcile the copied-marker Highlight from semantic state. */
+  private reconcileVisuals(): void {
+    // The runtime document can disappear (teardown, context invalidation).
+    if (!this.enabled || typeof document === "undefined") return;
+    this.visuals.reconcile(document);
+  }
+
+  // --- smart-position geometry ---------------------------------------------
+
+  /** Attach scroll/resize/visualViewport listeners exactly once. */
+  private attachGeometryListeners(settings: Settings): void {
+    if (!settings.writingCopy.shortcutEnabled) {
+      // Listener attachment is orthogonal to the shortcut; kept unconditional
+      // so smart positioning always tracks geometry while enabled.
+    }
+    window.addEventListener("scroll", this.boundGeometryUpdate, { passive: true });
+    window.addEventListener("resize", this.boundGeometryUpdate);
+    this.geometryListenersAttached = true;
+    const vv = (
+      globalThis as unknown as {
+        visualViewport?: {
+          addEventListener?: (t: string, l: () => void) => void;
+        };
+      }
+    ).visualViewport;
+    if (vv?.addEventListener) {
+      vv.addEventListener("scroll", this.boundVvScroll);
+      vv.addEventListener("resize", this.boundVvResize);
+      this.vvListenersAttached = true;
+    }
+  }
+
+  /** Detach all geometry listeners (idempotent). */
+  private detachGeometryListeners(): void {
+    if (this.geometryListenersAttached) {
+      window.removeEventListener("scroll", this.boundGeometryUpdate);
+      window.removeEventListener("resize", this.boundGeometryUpdate);
+      this.geometryListenersAttached = false;
+    }
+    const vv = (
+      globalThis as unknown as {
+        visualViewport?: {
+          removeEventListener?: (t: string, l: () => void) => void;
+        };
+      }
+    ).visualViewport;
+    if (this.vvListenersAttached && vv?.removeEventListener) {
+      vv.removeEventListener("scroll", this.boundVvScroll);
+      vv.removeEventListener("resize", this.boundVvResize);
+      this.vvListenersAttached = false;
+    }
+  }
+
+  /** Observe ONLY the current active target's size changes (one observer). */
+  private observeActiveTarget(target: HTMLElement | null): void {
+    if (
+      typeof ResizeObserver === "undefined"
+    ) {
+      return;
+    }
+    if (!target) {
+      this.activeResizeObserver?.disconnect();
+      this.observedActive = null;
+      return;
+    }
+    if (this.observedActive === target) return;
+    if (!this.activeResizeObserver) {
+      this.activeResizeObserver = new ResizeObserver(() =>
+        this.scheduleGeometryUpdate(),
+      );
+    }
+    this.activeResizeObserver.disconnect();
+    this.activeResizeObserver.observe(target);
+    this.observedActive = target;
+  }
+
+  /** rAF-coalesced host repositioning (no work when nothing changes). */
+  private scheduleGeometryUpdate(): void {
+    if (this.geometryRaf != null) return;
+    const raf =
+      typeof requestAnimationFrame !== "undefined"
+        ? requestAnimationFrame
+        : (cb: FrameRequestCallback): number =>
+            setTimeout(() => cb(0), 16) as unknown as number;
+    this.geometryRaf = raf(() => {
+      this.geometryRaf = null;
+      if (!this.enabled || !this.activeBlock || !this.activeBlock.isConnected) {
+        this.host.setVisible(false);
+        return;
+      }
+      this.host.positionAgainst(this.activeBlock, this.position);
+    });
   }
 
   // --- copy action ---------------------------------------------------------
@@ -249,6 +384,7 @@ export class WritingCopyController {
         // NOT claimed as copied — no fake durable success.
         if (persisted && target) setWritingCopyState(target, "copied");
         else if (target) setWritingCopyState(target, "uncopied");
+        this.reconcileVisuals();
         break;
       }
       case "unavailable":
@@ -328,6 +464,19 @@ export class WritingCopyController {
       this.root.classList.remove(cls);
     }
     clearAllWritingCopyMarkers(document);
+    this.visuals.teardown();
+    this.detachGeometryListeners();
+    if (this.geometryRaf != null) {
+      const caf =
+        typeof cancelAnimationFrame !== "undefined"
+          ? cancelAnimationFrame
+          : clearTimeout;
+      caf(this.geometryRaf);
+      this.geometryRaf = null;
+    }
+    this.observeActiveTarget(null);
+    this.activeResizeObserver = null;
+    this.observedActive = null;
     this.activeBlock = null;
     this.host.setVisible(false);
     this.host.setStatus("idle");
@@ -339,7 +488,7 @@ export class WritingCopyController {
   teardown(): void {
     this.restore();
     this.enabled = false;
-    this.position = "middle-right";
+    this.position = "smart";
   }
 
   /** Expose the handler reference so the runtime can attach/detach it. */
@@ -347,5 +496,3 @@ export class WritingCopyController {
     return this.keyHandler;
   }
 }
-
-export { hasWritingCopyEffects };

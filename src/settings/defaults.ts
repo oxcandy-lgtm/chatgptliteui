@@ -38,8 +38,16 @@ export const DEFAULT_SETTINGS: Settings = {
   },
   writingCopy: {
     enabled: false,
-    position: "middle-right",
+    position: "smart",
     shortcutEnabled: true,
+    markerEnabled: true,
+    markerColor: "#4c8dff",
+    markerOpacity: 30,
+    pulseEnabled: true,
+    pulseColor: "#4c8dff",
+    pulseIntensity: 18,
+    pulsePeriodMs: 4000,
+    backgroundEnabled: false,
   },
   codeBlocks: {
     autoCollapse: false,

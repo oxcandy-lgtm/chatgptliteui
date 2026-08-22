@@ -62,7 +62,7 @@
       </section>
 
       <section>
-        <h2>Writing copy</h2>
+        <h2>Writing Copy / CopyMarker</h2>
         <label class="cgl-row">
           <span>Enable floating copy control</span>
           <input type="checkbox" id="writingCopyEnabled" />
@@ -70,6 +70,7 @@
         <label class="cgl-row">
           <span>Position</span>
           <select id="writingCopyPosition">
+            <option value="smart">Smart</option>
             <option value="top-right">Top right</option>
             <option value="middle-right">Middle right</option>
             <option value="bottom-right">Bottom right</option>
@@ -79,6 +80,59 @@
           <span>Enable Alt+Shift+C shortcut</span>
           <input type="checkbox" id="writingCopyShortcut" />
         </label>
+
+        <h3>Copied marker</h3>
+        <label class="cgl-row">
+          <span>Enable copied marker</span>
+          <input type="checkbox" id="writingCopyMarkerEnabled" />
+        </label>
+        <label class="cgl-row">
+          <span>Marker color</span>
+          <input type="text" class="cgl-color" id="writingCopyMarkerColor" inputmode="text" />
+        </label>
+        <label class="cgl-row">
+          <span>Marker intensity (%)</span>
+          <input type="number" id="writingCopyMarkerOpacity" min="0" max="100" step="1" />
+        </label>
+
+        <h3>Uncopied indicator</h3>
+        <label class="cgl-row">
+          <span>Enable uncopied pulse</span>
+          <input type="checkbox" id="writingCopyPulseEnabled" />
+        </label>
+        <label class="cgl-row">
+          <span>Pulse color</span>
+          <input type="text" class="cgl-color" id="writingCopyPulseColor" inputmode="text" />
+        </label>
+        <label class="cgl-row">
+          <span>Pulse intensity (%)</span>
+          <input type="number" id="writingCopyPulseIntensity" min="0" max="100" step="1" />
+        </label>
+        <label class="cgl-row">
+          <span>Pulse speed (ms per cycle)</span>
+          <input type="number" id="writingCopyPulsePeriod" min="1000" max="10000" step="100" />
+        </label>
+
+        <h3>WritingBlock</h3>
+        <label class="cgl-row">
+          <span>Enable writing-block background</span>
+          <input type="checkbox" id="writingCopyBackgroundEnabled" />
+        </label>
+        <label class="cgl-row">
+          <span>Writing-block background</span>
+          <input type="text" class="cgl-color" id="writingBlockBackground" inputmode="text" />
+        </label>
+        <p class="cgl-note">
+          The writing-block background works independently of the general
+          custom theme.
+        </p>
+
+        <h3>History</h3>
+        <button id="clearCopyHistory" type="button">Clear copy history</button>
+        <p class="cgl-note">
+          Removes all copied-state history across every conversation. Copied
+          content itself is never stored — only which blocks were copied.
+        </p>
         <p class="cgl-note">
           Copied content is not stored. The extension never reads the clipboard.
         </p>
@@ -162,14 +216,9 @@
           <span>Text color</span>
           <input type="text" class="cgl-color" id="textColor" inputmode="text" />
         </label>
-        <label class="cgl-row">
-          <span>Writing-block background</span>
-          <input type="text" class="cgl-color" id="writingBlockBackground" inputmode="text" />
-        </label>
         <p class="cgl-note">
-          Writing-block background is applied only when Writing copy is enabled
-          and a custom theme is active, and only to safely detected writing
-          blocks.
+          The writing-block background lives in the Writing Copy / CopyMarker
+          section and works independently of this theme.
         </p>
       </section>
 

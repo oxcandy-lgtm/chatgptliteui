@@ -40,9 +40,16 @@ describe("injected CSS guards (Phase 2 scope)", () => {
   });
 
   it("scopes every rule to an extension-owned cgl- guard", () => {
+    // Strip @keyframes blocks first: their inner percentage selectors are
+    // frame definitions, not page rules. The keyframes themselves are only
+    // referenced from cgl--guarded rules.
+    let stripped = injected.replace(/@keyframes[^{]+\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}/g, "");
+    // Unwrap @media preludes: their inner rules ARE checked (they carry the
+    // cgl- guards); the prelude itself is a conditional, not a rule.
+    stripped = stripped.replace(/@media[^{]+\{/g, "");
     // Each selector block should reference a cgl- class or marker.
     // We check that no top-level selector lacks a cgl- token.
-    const blocks = injected
+    const blocks = stripped
       .split("}")
       .map((b) => b.split("{")[0]?.trim())
       .filter((s) => s && s.length > 0 && !s.startsWith("/*"));

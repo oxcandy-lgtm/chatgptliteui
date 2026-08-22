@@ -365,7 +365,14 @@ async function bootstrap(): Promise<void> {
           (s.writingCopy.enabled !== prev.writingCopy.enabled ||
             s.writingCopy.position !== prev.writingCopy.position ||
             s.writingCopy.shortcutEnabled !== prev.writingCopy.shortcutEnabled ||
-            s.appearance.useTheme !== prev.appearance.useTheme ||
+            s.writingCopy.markerEnabled !== prev.writingCopy.markerEnabled ||
+            s.writingCopy.markerColor !== prev.writingCopy.markerColor ||
+            s.writingCopy.markerOpacity !== prev.writingCopy.markerOpacity ||
+            s.writingCopy.pulseEnabled !== prev.writingCopy.pulseEnabled ||
+            s.writingCopy.pulseColor !== prev.writingCopy.pulseColor ||
+            s.writingCopy.pulseIntensity !== prev.writingCopy.pulseIntensity ||
+            s.writingCopy.pulsePeriodMs !== prev.writingCopy.pulsePeriodMs ||
+            s.writingCopy.backgroundEnabled !== prev.writingCopy.backgroundEnabled ||
             s.theme.writingBlockBackground !== prev.theme.writingBlockBackground);
         if (modeChanged || disabled) {
           sidebarController.clearTransient();
