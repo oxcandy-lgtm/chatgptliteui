@@ -355,6 +355,14 @@ export class XrayController {
       { k: "route shape", v: rt.route.shape },
       { k: "conv identity", v: rt.route.conversationIdentityAvailable ? "yes" : "no", tone: rt.route.conversationIdentityAvailable ? "pass" : "warn" },
       { k: "conversation container", v: scan.conversationContainerFound ? "found" : "NOT FOUND", tone: scan.conversationContainerFound ? "pass" : "fail" },
+      ...(scan.containerFallback.attempted
+        ? [
+            {
+              k: "container fallback",
+              v: `${scan.containerFallback.accepted ? "ACCEPTED" : scan.containerFallback.rejectionReason ?? "rejected"} (${scan.containerFallback.userAnchorCount}u/${scan.containerFallback.assistantAnchorCount}a)`,
+            },
+          ]
+        : [{ k: "container strategy", v: scan.conversationContainerStrategyId ?? "?" }]),
       { k: "assistant turns", v: String(scan.assistantTurnCount) },
       { k: "user turns", v: String(scan.userTurnCount) },
       { k: "raw candidates", v: String(wp.rawCandidateCount) },

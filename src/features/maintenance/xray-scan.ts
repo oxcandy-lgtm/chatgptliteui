@@ -26,6 +26,11 @@ import {
 } from "../writing-copy/writing-copy-detection.js";
 import { conversationTokenFromLocation } from "../writing-copy/block-identity.js";
 import { isHighlightApiAvailable } from "../writing-copy/writing-copy-visual-state.js";
+import {
+  inferConversationContainerFromTurnAnchors,
+  FALLBACK_STRATEGY_ID,
+  type ConversationContainerFallbackDiagnostic,
+} from "../../adapters/chatgpt-adapter.js";
 import { nodeSignature, type NodeSignature } from "./xray-signature.js";
 
 /** All SelectorTargets probed by the scan, in stable report order. */
@@ -103,6 +108,15 @@ export interface RuntimeState {
 export interface XrayScan {
   strategies: StrategyProbe[];
   conversationContainerFound: boolean;
+  /** Which container strategy won (explicit selector id or the fallback id). */
+  conversationContainerStrategyId: string | null;
+  /**
+   * Structural role-turn-common-ancestor fallback diagnostics. `attempted`
+   * is false when an explicit strategy succeeded.
+   */
+  containerFallback: ConversationContainerFallbackDiagnostic & {
+    attempted: boolean;
+  };
   assistantTurnCount: number;
   userTurnCount: number;
   writingPipeline: {
@@ -271,6 +285,26 @@ export function runXrayScan(
   const containerResult = adapter.detectConversationContainer();
   const containerRoot: ParentNode = containerResult.element ?? document;
 
+  // Container-fallback visibility: report exactly what happened. When an
+  // explicit selector strategy won, the structural fallback was NOT
+  // attempted; otherwise surface its full fail-closed diagnostic.
+  let containerFallback: XrayScan["containerFallback"];
+  if (containerResult.found && containerResult.strategy !== FALLBACK_STRATEGY_ID) {
+    containerFallback = {
+      attempted: false,
+      found: false,
+      strategyId: null,
+      confidence: null,
+      userAnchorCount: 0,
+      assistantAnchorCount: 0,
+      commonAncestorTag: null,
+      accepted: false,
+      rejectionReason: "NOT_ATTEMPTED_EXPLICIT_STRATEGY_SUCCEEDED",
+    };
+  } else {
+    containerFallback = inferConversationContainerFromTurnAnchors().diagnostic;
+  }
+
   // 1. Probe EVERY strategy of EVERY target individually.
   const strategies: StrategyProbe[] = [];
   for (const target of PROBED_TARGETS) {
@@ -350,6 +384,10 @@ export function runXrayScan(
   return {
     strategies,
     conversationContainerFound: containerResult.found,
+    conversationContainerStrategyId: containerResult.found
+      ? containerResult.strategy
+      : null,
+    containerFallback,
     assistantTurnCount: assistantTurns.length,
     userTurnCount: userTurns.length,
     writingPipeline: {

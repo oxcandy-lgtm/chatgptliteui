@@ -9,6 +9,7 @@
  */
 
 import type { XrayScan } from "./xray-scan.js";
+import type { ConversationContainerFallbackDiagnostic } from "../../adapters/chatgpt-adapter.js";
 import {
   deepStructuralTree,
   ancestorChain,
@@ -37,6 +38,11 @@ export interface XrayReportV1 {
     userTurnCount: number;
     conversationContainerFound: boolean;
   };
+  /**
+   * Structural container-fallback section — NOT a CSS selector strategy.
+   * Present exactly what the role-turn-common-ancestor inference did.
+   */
+  containerFallback: ConversationContainerFallbackDiagnostic;
   writingPipeline: XrayScan["writingPipeline"];
   editableRegions: unknown[];
   actions: unknown[];
@@ -187,6 +193,7 @@ export function buildXrayReport(
       userTurnCount: scan.userTurnCount,
       conversationContainerFound: scan.conversationContainerFound,
     },
+    containerFallback: scan.containerFallback,
     writingPipeline: scan.writingPipeline,
     editableRegions: scan.editableRegions,
     actions: scan.actions,
