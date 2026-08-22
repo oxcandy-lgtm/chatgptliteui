@@ -17,6 +17,7 @@
  */
 
 import type { ChatGptAdapter } from "../../adapters/chatgpt-adapter.js";
+import { WRITING_FALLBACK_STRATEGY_ID } from "../../adapters/chatgpt-adapter.js";
 import type { Settings } from "../../shared/types.js";
 import { STRATEGIES, resolveStrategy } from "../../adapters/selectors.js";
 import {
@@ -264,6 +265,20 @@ export class XrayController {
         }
       }
     }
+    // Structural anchored editors join the diagnostic union exactly when
+    // production detection used the fallback (same rule as the scan).
+    const writingDetection = this.adapter.detectWritingBlocks(container);
+    if (
+      writingDetection.found &&
+      writingDetection.strategy === WRITING_FALLBACK_STRATEGY_ID
+    ) {
+      for (const el of writingDetection.elements) {
+        if (!seen.has(el)) {
+          seen.add(el);
+          raw.push({ element: el, strategyId: WRITING_FALLBACK_STRATEGY_ID });
+        }
+      }
+    }
     return raw;
   }
 
@@ -363,6 +378,15 @@ export class XrayController {
             },
           ]
         : [{ k: "container strategy", v: scan.conversationContainerStrategyId ?? "?" }]),
+      ...(scan.writingBlockFallback.attempted
+        ? [
+            {
+              k: "writing fallback",
+              v: `${scan.writingBlockFallback.found ? "FOUND" : scan.writingBlockFallback.rejectionReason ?? "rejected"} (${scan.writingBlockFallback.headerAnchorCount} anchors / ${scan.writingBlockFallback.pairCount} pairs${scan.writingBlockFallback.ambiguousCount > 0 ? ` / ${scan.writingBlockFallback.ambiguousCount} ambiguous` : ""})`,
+              tone: scan.writingBlockFallback.found ? ("pass" as const) : ("warn" as const),
+            },
+          ]
+        : []),
       { k: "assistant turns", v: String(scan.assistantTurnCount) },
       { k: "user turns", v: String(scan.userTurnCount) },
       { k: "raw candidates", v: String(wp.rawCandidateCount) },

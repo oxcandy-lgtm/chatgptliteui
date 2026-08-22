@@ -1,18 +1,25 @@
 import type { ChatGptAdapter } from "../../adapters/chatgpt-adapter.js";
+import { WRITING_FALLBACK_STRATEGY_ID } from "../../adapters/chatgpt-adapter.js";
 import type { DetectionResult } from "../../adapters/detection-result.js";
 import type { Confidence } from "../../shared/types.js";
 
 /**
  * Safe writing-block detection gate and candidate normalization.
  *
- * The Adapter returns low-confidence (or combined) writing-block candidates.
+ * The Adapter returns high/medium-confidence writing-block candidates.
  * Before any extension action (marking, tracking, copying) we require:
  *  - detection confidence is `high` or `medium` (never `low`/`unknown`);
  *  - the candidate is connected;
  *  - it belongs to exactly one high-confidence Assistant turn;
  *  - it is not inside a User turn, the composer, the sidebar, a dialog/modal,
  *    `pre`, `code`, a button, or an extension-owned host;
- *  - it is not contenteditable;
+ *  - it is not contenteditable — EXCEPT the single surgically-proven case:
+ *    a candidate the Adapter itself returned via the structural
+ *    `writing-block-editor-anchored` strategy (`isProvenWritingBlockEditor`).
+ *    Every OTHER contenteditable element (composer, generic surfaces,
+ *    wrappers) remains rejected with CONTENTEDITABLE_SELF, and descendants
+ *    inside any contenteditable ancestor remain rejected with
+ *    CONTENTEDITABLE_ANCESTOR;
  *  - it does not contain the composer, sidebar, dialog, or another turn;
  *  - its visible text is non-empty at action time (checked separately).
  *
@@ -136,7 +143,8 @@ export function evaluateWritingBlockCandidate(
 
   const reasons: WritingBlockRejectionReason[] = [];
 
-  const confidence = candidateConfidence(candidate, adapter);
+  const detection = detectionInfoForCandidate(candidate, adapter);
+  const confidence = detection.confidence;
   if (confidence !== "high" && confidence !== "medium") {
     reasons.push("LOW_OR_UNKNOWN_CONFIDENCE");
   }
@@ -160,15 +168,26 @@ export function evaluateWritingBlockCandidate(
     reasons.push("CONTAINS_CODE");
   }
 
-  if (selfContentEditable(candidate)) reasons.push("CONTENTEDITABLE_SELF");
-  else if (ancestorContentEditable(candidate)) reasons.push("CONTENTEDITABLE_ANCESTOR");
+  // Contenteditable: reject generically, EXCEPT the single proven case —
+  // the exact editor the structural anchored strategy itself returned.
+  if (selfContentEditable(candidate)) {
+    if (!detection.provenAnchoredEditor) reasons.push("CONTENTEDITABLE_SELF");
+  } else if (ancestorContentEditable(candidate)) {
+    reasons.push("CONTENTEDITABLE_ANCESTOR");
+  }
 
   // Reject inside forbidden surfaces.
   if (closestDialog(candidate)) reasons.push("IN_DIALOG");
   if (candidate.closest('[data-testid="sidebar"], nav[aria-label*="chat history" i]')) {
     reasons.push("IN_SIDEBAR");
   }
-  if (candidate.closest('[role="textbox"], textarea, input')) {
+  const editableAncestor = candidate.closest('[role="textbox"], textarea, input');
+  if (
+    editableAncestor &&
+    // Same surgical exception: a PROVEN anchored editor may itself carry the
+    // editable role; any OUTER editable ancestor is still rejected.
+    !(detection.provenAnchoredEditor && editableAncestor === candidate)
+  ) {
     reasons.push("IN_EDITABLE_ANCESTOR");
   }
   if (candidate.closest(EXTENSION_HOST_SELECTOR)) reasons.push("IN_EXTENSION_HOST");
@@ -213,21 +232,39 @@ export function isSafeWritingBlock(
 }
 
 /**
- * Read the confidence the Adapter assigned to a candidate. We re-run detection
- * on the candidate's containing Assistant turn so the confidence reflects the
- * matched strategy (high/medium/low) rather than a hard-coded value.
+ * Surgical contenteditable exception.
+ *
+ * True ONLY when this exact element is `contenteditable="true"` AND the
+ * Adapter itself returned it via the structural
+ * `writing-block-editor-anchored` strategy (semantic WritingBlock header
+ * anchor + unique associated editor). Every other contenteditable surface —
+ * the composer, generic editable regions, wrappers — stays rejected.
  */
-function candidateConfidence(
+export function isProvenWritingBlockEditor(
   candidate: Element,
   adapter: ChatGptAdapter,
-): Confidence {
+): boolean {
+  if (candidate.getAttribute("contenteditable") !== "true") return false;
+  return detectionInfoForCandidate(candidate, adapter).provenAnchoredEditor;
+}
+
+/**
+ * Run Adapter writing-block detection ONCE for a candidate and derive both
+ * the strategy confidence and the surgical anchored-editor proof.
+ */
+function detectionInfoForCandidate(
+  candidate: Element,
+  adapter: ChatGptAdapter,
+): { confidence: Confidence; provenAnchoredEditor: boolean } {
   const container = adapter.detectConversationContainer().element ?? document;
   const result = adapter.detectWritingBlocks(container);
-  if (!result.found) return "unknown";
-  // The adapter returns the highest-confidence strategy that matched. If the
-  // candidate is among the matched elements, use that result's confidence.
-  if (result.elements.includes(candidate as HTMLElement)) return result.confidence;
-  return "unknown";
+  const included =
+    result.found && result.elements.includes(candidate as HTMLElement);
+  return {
+    confidence: included ? result.confidence : "unknown",
+    provenAnchoredEditor:
+      included && result.strategy === WRITING_FALLBACK_STRATEGY_ID,
+  };
 }
 
 /**

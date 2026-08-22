@@ -28,8 +28,11 @@ import { conversationTokenFromLocation } from "../writing-copy/block-identity.js
 import { isHighlightApiAvailable } from "../writing-copy/writing-copy-visual-state.js";
 import {
   inferConversationContainerFromTurnAnchors,
+  inferWritingBlocksFromEditorAnchors,
   FALLBACK_STRATEGY_ID,
+  WRITING_FALLBACK_STRATEGY_ID,
   type ConversationContainerFallbackDiagnostic,
+  type WritingBlockEditorFallbackDiagnostic,
 } from "../../adapters/chatgpt-adapter.js";
 import { nodeSignature, type NodeSignature } from "./xray-signature.js";
 
@@ -115,6 +118,13 @@ export interface XrayScan {
    * is false when an explicit strategy succeeded.
    */
   containerFallback: ConversationContainerFallbackDiagnostic & {
+    attempted: boolean;
+  };
+  /**
+   * Structural writing-block-editor-anchored fallback receipt. `attempted`
+   * is false when an explicit high/medium writing strategy matched.
+   */
+  writingBlockFallback: WritingBlockEditorFallbackDiagnostic & {
     attempted: boolean;
   };
   assistantTurnCount: number;
@@ -322,7 +332,35 @@ export function runXrayScan(
   );
 
   // 3. Raw writing candidates: UNION of all writing strategies, tagged with
-  // the first strategy that matched them, in DOM order.
+  //    the first strategy that matched them, in DOM order — plus the
+  //    structural anchored editors EXACTLY when production detection used
+  //    the fallback (explicit high/medium strategies matched nothing).
+  const writingDetection = adapter.detectWritingBlocks(containerRoot);
+  const usedExplicitWritingStrategy =
+    writingDetection.found &&
+    writingDetection.strategy !== WRITING_FALLBACK_STRATEGY_ID;
+  let writingBlockFallback: XrayScan["writingBlockFallback"];
+  if (usedExplicitWritingStrategy) {
+    writingBlockFallback = {
+      attempted: false,
+      found: false,
+      strategyId: null,
+      confidence: null,
+      assistantTurnsScanned: 0,
+      headerAnchorCount: 0,
+      contentEditableCount: 0,
+      pairCount: 0,
+      acceptedEditorCount: 0,
+      ambiguousCount: 0,
+      rejectionReason: "NOT_ATTEMPTED_EXPLICIT_STRATEGY_SUCCEEDED",
+    };
+  } else {
+    // The fallback RAN here (explicit strategies produced nothing); surface
+    // its full fail-closed diagnostic either way.
+    writingBlockFallback =
+      inferWritingBlocksFromEditorAnchors(containerRoot).diagnostic;
+  }
+
     const raw: { element: Element; strategyId: string }[] = [];
   const seen = new Set<Element>();
   for (const strategy of STRATEGIES.writingBlock) {
@@ -330,6 +368,17 @@ export function runXrayScan(
       if (!seen.has(el)) {
         seen.add(el);
         raw.push({ element: el, strategyId: strategy.id });
+      }
+    }
+  }
+  const usedWritingFallback =
+    writingDetection.found &&
+    writingDetection.strategy === WRITING_FALLBACK_STRATEGY_ID;
+  if (usedWritingFallback) {
+    for (const el of writingDetection.elements) {
+      if (!seen.has(el)) {
+        seen.add(el);
+        raw.push({ element: el, strategyId: WRITING_FALLBACK_STRATEGY_ID });
       }
     }
   }
@@ -347,6 +396,16 @@ export function runXrayScan(
       turnIndex: assistantTurnIndex(containerRoot, r.element),
     };
   });
+
+  // The receipt's accepted count comes from the SAME production verdicts.
+  if (usedWritingFallback) {
+    writingBlockFallback = {
+      ...writingBlockFallback,
+      acceptedEditorCount: candidates.filter(
+        (c) => c.strategyId === WRITING_FALLBACK_STRATEGY_ID && c.accepted,
+      ).length,
+    };
+  }
 
   const rejections: Record<string, number> = {};
   for (const c of candidates) {
@@ -388,6 +447,7 @@ export function runXrayScan(
       ? containerResult.strategy
       : null,
     containerFallback,
+    writingBlockFallback,
     assistantTurnCount: assistantTurns.length,
     userTurnCount: userTurns.length,
     writingPipeline: {

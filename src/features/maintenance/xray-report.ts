@@ -43,6 +43,11 @@ export interface XrayReportV1 {
    * Present exactly what the role-turn-common-ancestor inference did.
    */
   containerFallback: ConversationContainerFallbackDiagnostic;
+  /**
+   * Structural writing-block-editor-anchored fallback receipt (same model as
+   * containerFallback): attempted/found/anchors/editors/pairs/ambiguity.
+   */
+  writingBlockFallback: XrayScan["writingBlockFallback"];
   writingPipeline: XrayScan["writingPipeline"];
   editableRegions: unknown[];
   actions: unknown[];
@@ -108,12 +113,42 @@ export function diagnose(
     return { summary: "NO_WRITING_STRATEGY_MATCH", firstBlocker: "WRITING_STRATEGIES" };
   }
   if (wp.safeCount === 0) {
-    // Name the most common rejection reason deterministically (count desc,
-    // then lexicographic for ties). Ambiguous/empty -> UNKNOWN_AFTER_XRAY.
+    // Causal precedence #1: when the structural writing fallback RAN and
+    // failed while raw candidates exist, its fail-closed rejection IS the
+    // blocker — far more actionable than counting low-confidence noise.
+    const wbf = scan.writingBlockFallback;
+    if (wbf.attempted && !wbf.found && wbf.rejectionReason != null) {
+      const detail =
+        wbf.rejectionReason === "NOT_ATTEMPTED_EXPLICIT_STRATEGY_SUCCEEDED"
+          ? ""
+          : `_${wbf.rejectionReason}`;
+      if (detail !== "") {
+        return {
+          summary: `RAW_CANDIDATES_PRESENT_SAFE_ZERO${detail}`,
+          firstBlocker: `WRITING_FALLBACK:${wbf.rejectionReason}`,
+        };
+      }
+    }
+    // Causal precedence #2: name the most common rejection reason
+    // deterministically (count desc, then lexicographic for ties).
+    // Rejections of structurally anchored editors (the highest-confidence
+    // candidates) take precedence over the diagnostic low-confidence
+    // paragraph noise. Ambiguous/empty -> UNKNOWN_AFTER_XRAY.
+    const fallbackId = scan.writingBlockFallback.strategyId;
+    const preferred = fallbackId
+      ? wp.candidates.filter((c) => !c.accepted && c.strategyId === fallbackId)
+      : [];
+    const source =
+      preferred.length > 0 ? preferred : wp.candidates.filter((c) => !c.accepted);
     let topReason = "";
     let topCount = 0;
-    const entries = Object.entries(wp.rejections);
-    for (const [reason, count] of entries) {
+    const tally = new Map<string, number>();
+    for (const c of source) {
+      for (const reason of c.reasons) {
+        tally.set(reason, (tally.get(reason) ?? 0) + 1);
+      }
+    }
+    for (const [reason, count] of tally) {
       if (
         count > topCount ||
         (count === topCount && topReason !== "" && reason < topReason)
@@ -194,6 +229,7 @@ export function buildXrayReport(
       conversationContainerFound: scan.conversationContainerFound,
     },
     containerFallback: scan.containerFallback,
+    writingBlockFallback: scan.writingBlockFallback,
     writingPipeline: scan.writingPipeline,
     editableRegions: scan.editableRegions,
     actions: scan.actions,

@@ -2,6 +2,7 @@ import type { SelectorTarget } from "./selectors.js";
 import {
   STRATEGIES,
   resolveStrategy,
+  isVisible,
   type SelectorStrategy,
 } from "./selectors.js";
 import {
@@ -179,6 +180,194 @@ export function inferConversationContainerFromTurnAnchors(): {
 }
 
 /**
+ * Structural WritingBlock editor fallback.
+ *
+ * Current ChatGPT renders some Assistant writing content inside a markdown /
+ * prose editor surface (`contenteditable="true"`), fronted by an explicit
+ * WritingBlock-specific header action. The stable contract is therefore the
+ * SEMANTIC HEADER ANCHOR plus its uniquely associated editable editor:
+ *
+ *   button[data-testid="writing-block-header-magic-edit-button"]
+ *   + the DEEPEST structural ancestor region that contains the anchor and
+ *     EXACTLY ONE eligible editor ([contenteditable="true"])
+ *   + both confined to one Assistant turn.
+ *
+ * Fail-closed rules: anchors outside any Assistant turn, regions with more
+ * than one eligible editor (ambiguous), generic contenteditable surfaces
+ * WITHOUT such an anchor, and anything inside dialogs/sidebars/extension
+ * hosts => NOT FOUND. The EDITOR element (the actual text payload) is the
+ * canonical candidate — never the outer wrapper, whose text would include
+ * header labels and toolbar controls. Pure observation; never mutates the
+ * page and grants no destructive authority.
+ */
+
+/** WritingBlock-specific semantic header anchor. */
+export const WRITING_HEADER_ANCHOR_SELECTOR =
+  'button[data-testid="writing-block-header-magic-edit-button"]';
+
+/** Canonical editable editor surface of a WritingBlock. */
+const WRITING_EDITOR_SELECTOR = '[contenteditable="true"]';
+
+/** Forbidden ancestor surfaces for anchors, editors, and regions. */
+const WRITING_FORBIDDEN_ANCESTOR_SELECTOR =
+  '[role="dialog"], dialog, [aria-modal="true"], [data-testid="sidebar"], nav[aria-label*="chat history" i], [data-cgl-sidebar-host="true"], [data-cgl-writing-copy-host="true"], #cgl-sidebar-control-host';
+
+const ASSISTANT_TURN_SELECTOR =
+  '[data-message-author-role="assistant"], [data-testid="assistant-message"]';
+
+export const WRITING_FALLBACK_STRATEGY_ID = "writing-block-editor-anchored" as const;
+
+export interface WritingBlockEditorFallbackDiagnostic {
+  attempted: boolean;
+  found: boolean;
+  strategyId: typeof WRITING_FALLBACK_STRATEGY_ID | null;
+  confidence: "high" | null;
+  assistantTurnsScanned: number;
+  headerAnchorCount: number;
+  contentEditableCount: number;
+  /** Anchor→editor structural pairs resolved before gate evaluation. */
+  pairCount: number;
+  /** Pairs whose editor the PRODUCTION gate evaluator accepts. */
+  acceptedEditorCount: number;
+  /** Anchors whose upward walk hit a multi-editor region (fail closed). */
+  ambiguousCount: number;
+  rejectionReason:
+    | null
+    | "NOT_ATTEMPTED_EXPLICIT_STRATEGY_SUCCEEDED"
+    | "NO_CONNECTED_ASSISTANT_TURN"
+    | "NO_HEADER_ANCHOR"
+    | "NO_ELIGIBLE_EDITOR"
+    | "AMBIGUOUS_PAIRING"
+    | "PAIRING_FAILED";
+}
+
+/**
+ * Pair every WritingBlock header anchor in `container` with its unique
+ * associated contenteditable editor. Returns the DetectionResult AND the
+ * exact diagnostic for X-Ray. Pure observation — no DOM mutation. Fail-closed
+ * in every ambiguous case; supports multiple WritingBlocks per turn.
+ */
+export function inferWritingBlocksFromEditorAnchors(container: ParentNode): {
+  result: DetectionResult;
+  diagnostic: WritingBlockEditorFallbackDiagnostic;
+} {
+  const base: WritingBlockEditorFallbackDiagnostic = {
+    attempted: true,
+    found: false,
+    strategyId: WRITING_FALLBACK_STRATEGY_ID,
+    confidence: "high",
+    assistantTurnsScanned: 0,
+    headerAnchorCount: 0,
+    contentEditableCount: 0,
+    pairCount: 0,
+    acceptedEditorCount: 0,
+    ambiguousCount: 0,
+    rejectionReason: null,
+  };
+
+  const finishNotFound = (
+    reason: NonNullable<WritingBlockEditorFallbackDiagnostic["rejectionReason"]>,
+  ): { result: DetectionResult; diagnostic: WritingBlockEditorFallbackDiagnostic } => ({
+    result: notFound(WRITING_FALLBACK_STRATEGY_ID, reason),
+    diagnostic: { ...base, rejectionReason: reason },
+  });
+
+  const turns = Array.from(
+    container.querySelectorAll<HTMLElement>(ASSISTANT_TURN_SELECTOR),
+  ).filter((el) => el.isConnected);
+  if (turns.length === 0) return finishNotFound("NO_CONNECTED_ASSISTANT_TURN");
+
+  const eligibleEditorsIn = (scope: ParentNode): HTMLElement[] =>
+    Array.from(
+      scope.querySelectorAll<HTMLElement>(WRITING_EDITOR_SELECTOR),
+    ).filter(
+      (el) =>
+        el.isConnected &&
+        el instanceof HTMLElement &&
+        el.getAttribute("contenteditable") === "true" &&
+        isVisible(el) &&
+        !el.closest(WRITING_FORBIDDEN_ANCESTOR_SELECTOR) &&
+        (() => {
+          const ownerTurn = el.closest(ASSISTANT_TURN_SELECTOR);
+          return ownerTurn != null && turns.includes(ownerTurn as HTMLElement);
+        })(),
+    );
+
+  let ambiguousCount = 0;
+  const pairedEditors = new Set<HTMLElement>();
+  let headerAnchorCount = 0;
+
+  for (const turn of turns) {
+    const anchors = Array.from(
+      turn.querySelectorAll<HTMLElement>(WRITING_HEADER_ANCHOR_SELECTOR),
+    ).filter((el) => el.isConnected);
+    headerAnchorCount += anchors.length;
+    const turnEditors = eligibleEditorsIn(turn);
+
+    for (const anchor of anchors) {
+      // Walk upward from the anchor toward — but not beyond — its owning
+      // Assistant turn, looking for the DEEPEST region holding EXACTLY ONE
+      // eligible editor. Once a level holds more than one, every higher
+      // level holds at least as many: fail closed instead of guessing.
+      let region: HTMLElement | null = anchor.parentElement;
+      while (region && region !== turn.parentElement) {
+        const editorsHere = turnEditors.filter((e) => region!.contains(e));
+        if (editorsHere.length > 1) {
+          ambiguousCount++;
+          break;
+        }
+        if (editorsHere.length === 1) {
+          pairedEditors.add(editorsHere[0]!);
+          break;
+        }
+        region = region.parentElement;
+      }
+    }
+  }
+
+  const diag: WritingBlockEditorFallbackDiagnostic = {
+    ...base,
+    assistantTurnsScanned: turns.length,
+    headerAnchorCount,
+    contentEditableCount: eligibleEditorsIn(container).length,
+    pairCount: pairedEditors.size,
+    ambiguousCount,
+  };
+
+  if (pairedEditors.size === 0) {
+    const reason = ambiguousCount > 0
+      ? "AMBIGUOUS_PAIRING"
+      : headerAnchorCount === 0
+        ? "NO_HEADER_ANCHOR"
+        : diag.contentEditableCount === 0
+          ? "NO_ELIGIBLE_EDITOR"
+          : "PAIRING_FAILED";
+    return {
+      result: notFound(WRITING_FALLBACK_STRATEGY_ID, reason),
+      diagnostic: { ...diag, rejectionReason: reason },
+    };
+  }
+
+  // Deterministic DOM order for the canonical editors.
+  const editors = [...pairedEditors].sort((a, b) => {
+    const pos = a.compareDocumentPosition(b);
+    return pos & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1;
+  });
+
+  diag.found = true;
+  return {
+    result: makeResult({
+      element: editors[0] ?? null,
+      elements: editors,
+      confidence: "high",
+      strategy: WRITING_FALLBACK_STRATEGY_ID,
+      reason: `structural pairing of ${headerAnchorCount} writing header anchor(s) to ${editors.length} unique editable editor(s)`,
+    }),
+    diagnostic: diag,
+  };
+}
+
+/**
  * Deepest common HTMLElement ancestor of the given elements, or null. Only
  * HTMLElement ancestors are considered (document/html excluded by callers'
  * tag checks where required).
@@ -290,7 +479,25 @@ export class DefaultChatGptAdapter implements ChatGptAdapter {
   }
 
   detectWritingBlocks(container: ParentNode): DetectionResult {
-    return runTarget("writingBlock", container);
+    // 1) Existing explicit HIGH/MEDIUM strategies keep priority, unchanged.
+    const strategies = STRATEGIES.writingBlock;
+    const highMedium = strategies.filter((s) => s.confidence !== "low");
+    for (const strategy of highMedium) {
+      const matches = resolveStrategy("writingBlock", strategy, container);
+      if (matches.length > 0) {
+        return makeResult({
+          element: matches[0] ?? null,
+          elements: matches,
+          confidence: strategy.confidence,
+          strategy: strategy.id,
+          reason: `matched ${matches.length} element(s) via ${strategy.id}`,
+        });
+      }
+    }
+    // 2) Structural WritingBlock editor fallback (fail-closed).
+    return inferWritingBlocksFromEditorAnchors(container).result;
+    // 3) The LOW bare-paragraph strategy is deliberately NOT run here. It is
+    //    diagnostic-only and must never block the structural fallback above.
   }
 
   detectOriginalCopyButton(container: ParentNode): DetectionResult {
