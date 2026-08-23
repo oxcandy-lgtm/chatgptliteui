@@ -25,6 +25,7 @@
 
 const HOST_ID = "cgl-writing-copy-host";
 const HOST_ATTR = "data-cgl-writing-copy-host";
+import { stampBootId } from "../../shared/runtime-health.js";
 const STATUS_IDLE = "Nothing safe to copy.";
 
 const HOST_STYLE = `
@@ -77,6 +78,18 @@ export class WritingCopyHost {
     return this.host != null && this.host.isConnected;
   }
 
+  /** True when the host is explicitly marked visible. */
+  get isVisible(): boolean {
+    return this.host?.getAttribute("data-visible") === "true";
+  }
+
+  /** Current rendered size of the host element, or null when unmounted. */
+  get renderedSize(): { w: number; h: number } | null {
+    if (!this.host || !this.host.isConnected) return null;
+    const r = this.host.getBoundingClientRect();
+    return { w: r.width, h: r.height };
+  }
+
   /**
    * Ensure exactly one Shadow DOM host exists. Reuses an existing host (never
    * duplicates). `onClick` is (re)bound idempotently.
@@ -120,6 +133,7 @@ export class WritingCopyHost {
     this.statusEl = status;
     this.bindClick();
 
+    stampBootId(host);
     document.body.appendChild(host);
   }
 

@@ -30,6 +30,10 @@ import {
   type PickedTargetInfo,
 } from "./xray-report.js";
 import { XrayHost, XRAY_HOST_ATTR, type XrayStatusInput } from "./xray-host.js";
+import { isInvalidatedLatched } from "../../shared/runtime-health.js";
+import type {
+  WritingCopyControllerReceipt,
+} from "../writing-copy/writing-copy-controller.js";
 
 /** Extension-owned diagnostic paint attributes (X-Ray-only, removed on close). */
 const PAINT_ASSISTANT_TURN = "data-cgl-xray-assistant-turn";
@@ -72,6 +76,11 @@ export interface XrayDeps {
   adapter: ChatGptAdapter;
   /** Latest validated settings (already loaded by the content runtime). */
   getSettings: () => Settings | null;
+  /**
+   * Live Writing Copy controller receipt accessor (wired by the content
+   * runtime; optional so unit tests can omit it).
+   */
+  getWritingCopyControllerReceipt?: () => WritingCopyControllerReceipt | null;
 }
 
 /** Root class guarding ALL diagnostic paint CSS (present only while active). */
@@ -82,6 +91,9 @@ export class XrayController {
   private readonly root: HTMLElement;
   private readonly adapter: ChatGptAdapter;
   private readonly getSettings: () => Settings | null;
+  private readonly getWritingCopyControllerReceipt:
+    | (() => WritingCopyControllerReceipt | null)
+    | null;
 
   private active = false;
   private pickerMode = false;
@@ -125,6 +137,8 @@ export class XrayController {
     this.root = deps.root;
     this.adapter = deps.adapter;
     this.getSettings = deps.getSettings;
+    this.getWritingCopyControllerReceipt =
+      deps.getWritingCopyControllerReceipt ?? null;
   }
 
   // --- state accessors -----------------------------------------------------
@@ -195,12 +209,26 @@ export class XrayController {
   refresh(): void {
     if (!this.active) return;
     const settings = this.getSettings();
-    this.lastScan = runXrayScan(this.adapter, {
-      enabled: settings?.enabled ?? false,
-      writingCopyEnabled: settings?.writingCopy.enabled ?? false,
-    });
+    this.lastScan = runXrayScan(
+      this.adapter,
+      {
+        enabled: settings?.enabled ?? false,
+        writingCopyEnabled: settings?.writingCopy.enabled ?? false,
+      },
+      this.getControllerReceipt(),
+    );
     this.paint();
     this.host.setStatus(this.statusRows(this.lastScan));
+  }
+
+  /** Live Writing Copy controller receipt, or null when not wired. */
+  private getControllerReceipt(): WritingCopyControllerReceipt | null {
+    if (!this.getWritingCopyControllerReceipt) return null;
+    try {
+      return this.getWritingCopyControllerReceipt();
+    } catch {
+      return null;
+    }
   }
 
   // --- paint ---------------------------------------------------------------
@@ -333,10 +361,14 @@ export class XrayController {
 
   private scanNow(): XrayScan {
     const settings = this.getSettings();
-    return runXrayScan(this.adapter, {
-      enabled: settings?.enabled ?? false,
-      writingCopyEnabled: settings?.writingCopy.enabled ?? false,
-    });
+    return runXrayScan(
+      this.adapter,
+      {
+        enabled: settings?.enabled ?? false,
+        writingCopyEnabled: settings?.writingCopy.enabled ?? false,
+      },
+      this.getControllerReceipt(),
+    );
   }
 
   /**
@@ -363,8 +395,37 @@ export class XrayController {
   private statusRows(scan: XrayScan): XrayStatusInput {
     const rt = scan.runtime;
     const wp = scan.writingPipeline;
+    const health = scan.runtimeHealth;
+    const invalidated = isInvalidatedLatched();
+
+    // Visible runtime status line — obvious without reading JSON.
+    const buildShort = health.buildId.split("+")[1] ?? health.buildId;
+    const bootShort = health.contentScriptBootId.replace(/^boot-/, "").slice(0, 6);
+    const runtimeLabel = invalidated
+      ? "RUNTIME RED — EXTENSION CONTEXT INVALIDATED"
+      : rt.extensionRuntimeOk
+        ? "RUNTIME GREEN"
+        : "RUNTIME RED";
+    const runtimeTone = invalidated || !rt.extensionRuntimeOk ? "fail" : "pass";
+
     const rows: XrayStatusInput["rows"] = [
-      { k: "runtime", v: rt.extensionRuntimeOk ? "PASS" : "FAIL", tone: rt.extensionRuntimeOk ? "pass" : "fail" },
+      { k: "BUILD", v: buildShort },
+      { k: "BOOT", v: bootShort },
+      { k: "RUNTIME", v: runtimeLabel, tone: runtimeTone },
+      ...(health.duplicateOrStaleContentScript
+        ? [{ k: "BOOT IDS", v: "DUPLICATE_OR_STALE_CONTENT_SCRIPT", tone: "fail" as const }]
+        : []),
+      ...(invalidated
+        ? [{ k: "context", v: "STALE EXTENSION CONTEXT", tone: "fail" as const }]
+        : [{ k: "context", v: health.extensionContextValid ? "valid" : "unknown", tone: health.extensionContextValid ? ("pass" as const) : ("warn" as const) }]),
+      ...(health.storageProbeOk === true
+        ? [{ k: "storage probe", v: "ok", tone: "pass" as const }]
+        : health.storageProbeOk === false
+          ? [{ k: "storage probe", v: "FAIL", tone: "fail" as const }]
+          : [{ k: "storage probe", v: "n/a" }]),
+      ...(health.internalErrorCount > 0
+        ? [{ k: "internal errors", v: String(health.internalErrorCount), tone: "warn" as const }]
+        : []),
       { k: "extension enabled", v: String(rt.extensionEnabled), tone: rt.extensionEnabled ? "pass" : "warn" },
       { k: "writing copy enabled", v: String(rt.writingCopyEnabled), tone: rt.writingCopyEnabled ? "pass" : "warn" },
       { k: "route shape", v: rt.route.shape },
@@ -408,6 +469,18 @@ export class XrayController {
       v: rt.generatingIndicatorPresent ? "present" : "absent",
     });
     if (this.picked) rows.push({ k: "picked target", v: "captured" });
+    if (scan.writingCopyController) {
+      const c = scan.writingCopyController;
+      rows.push(
+        { k: "controller started/enabled", v: `${c.controllerStarted}/${c.enabled}` },
+        { k: "safe/tracked/visible", v: `${c.detectedSafeBlockCount}/${c.trackedBlockCount}/${c.visibleBlockCount}` },
+        { k: "active block", v: c.activeBlockSelected ? `#${c.activeBlockIndex}` : "none" },
+        { k: "host mounted/visible", v: `${c.hostMounted && c.hostConnected}/${c.hostVisible}` },
+        ...(c.mountBlocker
+          ? [{ k: "mount blocker", v: c.mountBlocker, tone: "fail" as const }]
+          : []),
+      );
+    }
 
     const d = diagnose(scan);
     const blocker = d.firstBlocker

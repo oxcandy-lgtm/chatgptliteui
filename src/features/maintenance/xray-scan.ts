@@ -35,6 +35,14 @@ import {
   type WritingBlockEditorFallbackDiagnostic,
 } from "../../adapters/chatgpt-adapter.js";
 import { nodeSignature, type NodeSignature } from "./xray-signature.js";
+import {
+  isRuntimeOk,
+  snapshotRuntimeHealth,
+  type RuntimeHealthSnapshot,
+} from "../../shared/runtime-health.js";
+import type {
+  WritingCopyControllerReceipt,
+} from "../writing-copy/writing-copy-controller.js";
 
 /** All SelectorTargets probed by the scan, in stable report order. */
 const PROBED_TARGETS: SelectorTarget[] = [
@@ -139,6 +147,10 @@ export interface XrayScan {
   editableRegions: TurnSurfaceInfo[];
   actions: TurnSurfaceInfo[];
   runtime: RuntimeState;
+  /** Health-authority snapshot (identity, context validity, error bus). */
+  runtimeHealth: RuntimeHealthSnapshot;
+  /** Copy-host pipeline receipt (null when no controller is wired). */
+  writingCopyController: WritingCopyControllerReceipt | null;
 }
 
 /** Count live ranges held by the extension's copied-marker Highlight. */
@@ -287,10 +299,14 @@ function collectTurnSurfaces(
 /**
  * Run the complete X-Ray structural scan. Pure observation: never mutates
  * the page.
+ *
+ * `controller` is the live Writing Copy controller receipt (pass null when
+ * no controller exists, e.g. unit tests).
  */
 export function runXrayScan(
   adapter: ChatGptAdapter,
   settings: { enabled: boolean; writingCopyEnabled: boolean },
+  controller: WritingCopyControllerReceipt | null = null,
 ): XrayScan {
   const containerResult = adapter.detectConversationContainer();
   const containerRoot: ParentNode = containerResult.element ?? document;
@@ -417,10 +433,11 @@ export function runXrayScan(
   // 5. Editable + action inventories.
   const { editable, actions } = collectTurnSurfaces(containerRoot, raw);
 
-  // 6. Runtime state.
+  // 6. Runtime state — extensionRuntimeOk is now HEALTH-AUTHORITATIVE
+  //    (runtime-health module), never hardcoded true.
   const generating = adapter.detectGeneratingIndicator();
   const runtime: RuntimeState = {
-    extensionRuntimeOk: true,
+    extensionRuntimeOk: isRuntimeOk(),
     extensionEnabled: settings.enabled,
     writingCopyEnabled: settings.writingCopyEnabled,
     highlightApiSupported: isHighlightApiAvailable(),
@@ -460,5 +477,7 @@ export function runXrayScan(
     editableRegions: editable,
     actions,
     runtime,
+    runtimeHealth: snapshotRuntimeHealth(document),
+    writingCopyController: controller,
   };
 }

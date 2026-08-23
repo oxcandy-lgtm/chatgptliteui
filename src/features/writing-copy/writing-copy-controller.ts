@@ -53,6 +53,43 @@ import { WritingCopyVisualState } from "./writing-copy-visual-state.js";
 
 export const WRITING_COPY_HOST_ATTR = HOST_ATTR;
 
+/** Serializable controller receipt for the X-Ray AI report (no text/DOM). */
+export interface WritingCopyControllerReceipt {
+  controllerStarted: boolean;
+  enabled: boolean;
+  detectedSafeBlockCount: number;
+  trackedBlockCount: number;
+  visibleBlockCount: number;
+  activeBlockSelected: boolean;
+  activeBlockIndex: number;
+  hostMounted: boolean;
+  hostConnected: boolean;
+  hostVisible: boolean;
+  positionMode: string;
+  /** First deterministic blocker, or null when nothing blocks the pipeline. */
+  mountBlocker: string | null;
+}
+
+/**
+ * Deterministic copy-host blocker codes, evaluated in causal order. The first
+ * matching code wins; `UNKNOWN` only when no specific cause is identifiable.
+ */
+export function deriveMountBlocker(
+  receipt: Omit<WritingCopyControllerReceipt, "mountBlocker"> & {
+    /** Host mounted+connected but rendered with no size in the viewport. */
+    hostZeroSize: boolean;
+  },
+): string | null {
+  if (!receipt.controllerStarted) return "CONTROLLER_NOT_STARTED";
+  if (!receipt.enabled) return "CONTROLLER_NOT_STARTED";
+  if (receipt.detectedSafeBlockCount === 0) return "NO_SAFE_BLOCK";
+  if (receipt.visibleBlockCount === 0) return "NO_VISIBLE_BLOCK";
+  if (!receipt.activeBlockSelected) return "NO_ACTIVE_BLOCK";
+  if (!receipt.hostMounted || !receipt.hostConnected) return "HOST_NOT_MOUNTED";
+  if (!receipt.hostVisible || receipt.hostZeroSize) return "HOST_ZERO_SIZE";
+  return null;
+}
+
 export class WritingCopyController {
   private readonly root: HTMLElement;
   private readonly adapter: ChatGptAdapter;
@@ -63,6 +100,10 @@ export class WritingCopyController {
   private enabled = false;
   private position: CopyPosition = "smart";
   private activeBlock: HTMLElement | null = null;
+  /** Whether apply() has started controller activity since construction. */
+  private started = false;
+  /** Safe-block count from the most recent detection pass. */
+  private lastDetectedSafeCount = 0;
   /**
    * Hydration epoch (race guard): every restore/teardown and every new
    * hydration generation invalidates all in-flight hydrations. A hydration
@@ -137,6 +178,7 @@ export class WritingCopyController {
     this.restore();
     this.enabled = settings.enabled && settings.writingCopy.enabled;
     this.position = settings.writingCopy.position;
+    this.started = this.started || this.enabled;
 
     if (!this.enabled) {
       this.activeBlock = null;
@@ -228,9 +270,44 @@ export class WritingCopyController {
 
   /** Mark all currently safe writing blocks with the extension marker. */
   private markSafeBlocks(): void {
-    for (const el of findSafeWritingBlocks(this.adapter)) {
-      if (el.isConnected) markWritingBlock(el);
+    const safe = findSafeWritingBlocks(this.adapter).filter((el) => el.isConnected);
+    this.lastDetectedSafeCount = safe.length;
+    for (const el of safe) {
+      markWritingBlock(el);
     }
+  }
+
+  /**
+   * Serializable controller receipt for the X-Ray AI report (structure only:
+   * counts and flags, never text or DOM HTML). Uses ACTUAL controller state.
+   */
+  buildReceipt(): WritingCopyControllerReceipt {
+    const tracked = this.tracker.candidatesList;
+    const vh = (typeof window !== "undefined" ? window.innerHeight : 0) || 0;
+    const visible = tracked.filter((el) => {
+      if (!el.isConnected) return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 0 && r.height > 0 && r.bottom > 0 && r.top < vh;
+    });
+    const size = this.host.renderedSize;
+    const zeroSize = this.host.isMounted && (!size || size.w <= 0 || size.h <= 0);
+    const base: Omit<WritingCopyControllerReceipt, "mountBlocker"> & {
+      hostZeroSize: boolean;
+    } = {
+      controllerStarted: this.started,
+      enabled: this.enabled,
+      detectedSafeBlockCount: this.lastDetectedSafeCount,
+      trackedBlockCount: tracked.length,
+      visibleBlockCount: visible.length,
+      activeBlockSelected: this.activeBlock != null && this.activeBlock.isConnected,
+      activeBlockIndex: tracked.indexOf(this.activeBlock as HTMLElement),
+      hostMounted: this.host.isMounted,
+      hostConnected: this.host.isMounted && this.host.renderedSize != null,
+      hostVisible: this.host.isVisible,
+      positionMode: this.position,
+      hostZeroSize: zeroSize,
+    };
+    return { ...base, mountBlocker: deriveMountBlocker(base) };
   }
 
   /** Show/hide + position the host against the active block. */

@@ -14,6 +14,10 @@
 
 export const XRAY_HOST_ATTR = "data-cgl-xray-host";
 
+// Boot identity: every extension-owned runtime host carries THIS content
+// script's boot id so X-Ray can detect duplicate/stale content scripts.
+import { stampBootId } from "../../shared/runtime-health.js";
+
 const HOST_STYLE = `
   :host { all: initial; }
   * { box-sizing: border-box; font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
@@ -158,6 +162,7 @@ export class XrayHost {
     panel.appendChild(btns);
 
     shadow.appendChild(panel);
+    stampBootId(host);
     this.host = host;
     document.body.appendChild(host);
   }

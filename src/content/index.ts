@@ -1,5 +1,8 @@
 import type { Settings } from "../shared/types.js";
-import { getSettings } from "../settings/storage.js";
+import {
+  getSettings,
+  SettingsUnavailableError,
+} from "../settings/storage.js";
 import { ThemeApplier } from "./lifecycle.js";
 import { RouteListener } from "./route-listener.js";
 import { createAdapter } from "../adapters/chatgpt-adapter.js";
@@ -15,12 +18,27 @@ import {
   isXrayShortcut,
 } from "../features/maintenance/xray-controller.js";
 import { logger } from "../shared/logger.js";
+import {
+  CODE_EXTENSION_CONTEXT_INVALIDATED,
+  onInvalidated,
+  probeExtensionContext,
+  recordInternalError,
+} from "../shared/runtime-health.js";
 
 /**
- * Content script entry point (Phase 3 — appearance + safe sidebar controls).
+ * Quiesce hook: ANY invalidation latch (boot probe, storage read/write
+ * classification) cleanly stops this stale runtime's active behavior.
+ * Registered once at module load; the listener fires exactly once.
+ */
+onInvalidated(() => quiesceStaleRuntime());
+/**
+ * Content script entry point (Phase 4 — writing copy + runtime health).
  *
  * Responsibilities:
- *  - load settings;
+ *  - load settings (FAIL CLOSED on extension-context invalidation: features
+ *    never initialize from defaults while Chrome APIs are dead);
+ *  - maintain the runtime-health authority: canonical context probe at boot,
+ *    quiesce-on-invalidation, boot identity stamped by extension-owned hosts;
  *  - apply appearance via extension-owned root classes, `--cgl-*` custom
  *    properties, and `data-cgl-*` surface markers;
  *  - apply sidebar visibility modes (visible/hover/button/hidden) through
@@ -33,8 +51,8 @@ import { logger } from "../shared/logger.js";
  *  - detect SPA route changes and re-apply non-destructively;
  *  - observe structural DOM mutations to re-mark surfaces and rebound the
  *    sidebar, coalesced into one debounced refresh;
- *  - handle the fixed `Alt+Shift+L` sidebar shortcut through the content
- *    script (no chrome.commands).
+ *  - handle the fixed Alt+Shift+L sidebar shortcut, the Alt+Shift+C writing-
+ *    copy shortcut, and the X-Ray maintenance shortcut Alt+Shift+X.
  *
  * It performs NO destructive DOM operations and makes NO external network
  * request.
@@ -48,6 +66,8 @@ const xrayController = new XrayController({
   root: document.documentElement,
   adapter,
   getSettings: () => lastSettings,
+  getWritingCopyControllerReceipt: () =>
+    writingCopyController.buildReceipt(),
 });
 const routeListener = new RouteListener();
 
@@ -72,6 +92,14 @@ let observerEpoch = 0;
 /** Previously applied settings, used to reconcile the observer after a transient toggle. */
 let lastSettings: Settings | null = null;
 
+/** Whether this runtime has been quiesced (extension context invalidated). */
+let quiesced = false;
+
+/** The registered chrome.storage.onChanged listener (removed on quiesce). */
+let storageChangeListener:
+  | ((changes: Record<string, unknown>, area: string) => void)
+  | null = null;
+
 /**
  * Effective runtime observation requirement (Fix 3): appearance effects, a
  * non-visible persisted sidebar mode, an active transient sidebar effect, OR
@@ -93,11 +121,13 @@ function hasRuntimeEffects(settings: Settings): boolean {
  * window. It updates BOTH appearance markers and sidebar detection/binding.
  */
 const scheduleMarkerRefresh = debounce((): void => {
-  void getSettings().then((settings) => {
-    applier.refreshMarkers(settings);
-    sidebarController.refresh(settings);
-    writingCopyController.refresh(settings);
-  });
+  void getSettings()
+    .then((settings) => {
+      applier.refreshMarkers(settings);
+      sidebarController.refresh(settings);
+      writingCopyController.refresh(settings);
+    })
+    .catch((err) => handleSettingsFailure(err, "scheduleMarkerRefresh"));
 }, 120);
 
 /** Apply settings and connect/disconnect the observer per the active profile. */
@@ -119,16 +149,27 @@ function syncRuntime(settings: Settings): void {
   // Phase 4: attach/detach the writing-copy shortcut listener independently so
   // it can be active only when the feature (and its shortcut) is enabled, and
   // never duplicates across repeated apply calls.
-  if (writingCopyController.isShortcutActive(settings) && !writingCopyListenerAttached) {
+  if (
+    writingCopyController.isShortcutActive(settings) &&
+    !writingCopyListenerAttached
+  ) {
     document.addEventListener("keydown", writingCopyController.keyboardHandler);
     writingCopyListenerAttached = true;
-  } else if (!writingCopyController.isShortcutActive(settings) && writingCopyListenerAttached) {
-    document.removeEventListener("keydown", writingCopyController.keyboardHandler);
+  } else if (
+    !writingCopyController.isShortcutActive(settings) &&
+    writingCopyListenerAttached
+  ) {
+    document.removeEventListener(
+      "keydown",
+      writingCopyController.keyboardHandler,
+    );
     writingCopyListenerAttached = false;
   }
 
   // X-Ray maintenance port: the Alt+Shift+X listener is ALWAYS attached (it
-  // must work even when the extension is disabled). Idempotent attach.
+  // must work even when the extension is disabled). Idempotent attach. It
+  // intentionally SURVIVES quiesce so a stale runtime can still open the
+  // local diagnostic panel, which visibly reports the stale context.
   if (!xrayListenerAttached) {
     document.addEventListener("keydown", handleXrayKeydown);
     xrayListenerAttached = true;
@@ -144,9 +185,91 @@ function syncRuntime(settings: Settings): void {
   lastSettings = settings;
 }
 
-/** Apply current settings; used on bootstrap, storage change, and route change. */
+/**
+ * Apply current settings; used on bootstrap, storage change, and route change.
+ * NO-OP once quiesced: a dead runtime must never re-initialize features from
+ * any settings source.
+ */
 function applyCurrent(): void {
-  void getSettings().then(syncRuntime);
+  if (quiesced) return;
+  void getSettings()
+    .then(syncRuntime)
+    .catch((err) => handleSettingsFailure(err, "applyCurrent"));
+}
+
+/**
+ * Shared fail-closed handler for settings-load failures in fire-and-forget
+ * flows: invalidated context latches invalidation (the quiesce listener does
+ * the rest); every other error is recorded ONCE through the bounded internal
+ * error bus. Defaults are never treated as authoritative here.
+ */
+export function handleSettingsFailure(err: unknown, operation: string): void {
+  if (
+    err instanceof SettingsUnavailableError &&
+    err.code === CODE_EXTENSION_CONTEXT_INVALIDATED
+  ) {
+    if (!quiesced) quiesceStaleRuntime();
+    return;
+  }
+  recordInternalError({
+    code: "SETTINGS_LOAD_FAILED",
+    scope: "content",
+    err,
+    operation,
+  });
+  logger.error("content", "settings load failed", err);
+}
+
+/**
+ * Quiesce THIS stale content-script runtime cleanly once the extension
+ * context is invalid. Stops extension-owned active behavior:
+ *  - Writing Copy controller activity (host, tracker observers, rAF loops,
+ *    visual state owned by this runtime);
+ *  - the structural MutationObserver;
+ *  - product keyboard listeners (sidebar / writing copy);
+ *  - the route listener;
+ *  - the chrome.storage.onChanged listener;
+ *  - settings update activity (all future apply paths become no-ops).
+ *
+ * ChatGPT content is NEVER removed or modified. The X-Ray Alt+Shift+X port
+ * stays usable as a LOCAL diagnostic; its panel visibly reports the stale
+ * extension context instead of a normal green status.
+ */
+export function quiesceStaleRuntime(): void {
+  if (quiesced) return;
+  quiesced = true;
+  scheduleMarkerRefresh.cancel();
+
+  if (storageChangeListener && typeof chrome !== "undefined" && chrome.storage?.onChanged) {
+    try {
+      chrome.storage.onChanged.removeListener(storageChangeListener);
+    } catch {
+      // Context already gone: nothing left to remove.
+    }
+  }
+  storageChangeListener = null;
+
+  if (keyboardListenerAttached) {
+    document.removeEventListener("keydown", handleKeydown);
+    keyboardListenerAttached = false;
+  }
+  if (writingCopyListenerAttached) {
+    document.removeEventListener(
+      "keydown",
+      writingCopyController.keyboardHandler,
+    );
+    writingCopyListenerAttached = false;
+  }
+  runtimeEnabled = false;
+  disconnectObserver();
+  sidebarController.teardown();
+  writingCopyController.teardown();
+  applier.restore();
+  routeListener.stop();
+  logger.warn(
+    "content",
+    "runtime quiesced: extension context invalidated; reload the page",
+  );
 }
 
 /**
@@ -156,7 +279,7 @@ function applyCurrent(): void {
  * restored one is disconnected when no other effect remains.
  */
 function reconcileObserver(): void {
-  if (!lastSettings) return;
+  if (!lastSettings || quiesced) return;
   if (runtimeEnabled && hasRuntimeEffects(lastSettings)) {
     connectObserver(lastSettings);
   } else {
@@ -235,6 +358,7 @@ function lowestCommonAncestor(a: Node, b: Node): Node | null {
  * path). Reconnect idempotently when the target changes.
  */
 function connectObserver(settings: Settings): void {
+  if (quiesced) return;
   const target = pickObserverTarget(settings);
   if (observedTarget === target && observer) return; // already observing
   if (observer) observer.disconnect();
@@ -309,6 +433,7 @@ function teardown(): void {
 
 /** Re-apply after a route change: restore markers, refresh, re-sync. */
 function reapplyAfterRouteChange(): void {
+  if (quiesced) return;
   applier.restore();
   sidebarController.restore();
   writingCopyController.restore();
@@ -320,12 +445,15 @@ function reapplyAfterRouteChange(): void {
 /**
  * Global keydown handler for the fixed `Alt+Shift+L` sidebar shortcut.
  *
- * Order of checks (Fix 2): enabled -> not repeat -> not composing -> non-
- * editable origin -> exact modifiers + KeyL -> preventDefault -> toggle. No
- * storage read is performed merely to determine whether the extension is
- * enabled; the synchronous `runtimeEnabled` flag is used instead.
+ * Order of checks (Fix 2): healthy-runtime -> enabled -> not repeat -> not
+ * composing -> non-editable origin -> exact modifiers + KeyL ->
+ * preventDefault -> toggle. No storage read is performed merely to determine
+ * whether the extension is enabled; the synchronous `runtimeEnabled` flag is
+ * used instead.
  */
 function handleKeydown(e: KeyboardEvent): void {
+  // 0. quiesced runtimes perform no product actions
+  if (quiesced) return;
   // 1. enabled
   if (!runtimeEnabled) return;
   // 2. ignore repeats
@@ -369,8 +497,10 @@ function handleKeydown(e: KeyboardEvent): void {
  *
  * Unlike product shortcuts, X-Ray works EVEN when the extension is disabled —
  * it is a maintenance port, so only repeat/composition/editable-origin safety
- * checks apply. The controller itself owns the ON/OFF toggle state and the
- * exact modifier match (Alt+Shift+KeyX, no Ctrl/Meta).
+ * checks apply. After quiesce it remains available as a LOCAL diagnostic; the
+ * panel visibly reports STALE EXTENSION CONTEXT. The controller itself owns
+ * the ON/OFF toggle state and the exact modifier match (Alt+Shift+KeyX, no
+ * Ctrl/Meta).
  */
 function handleXrayKeydown(e: KeyboardEvent): void {
   if (e.repeat) return;
@@ -394,7 +524,20 @@ function handleXrayKeydown(e: KeyboardEvent): void {
 }
 
 async function bootstrap(): Promise<void> {
-  const settings = await getSettings();
+  // Canonical extension-context health FIRST: probe before any feature reads
+  // settings, so a stale runtime fails closed instead of continuing on
+  // defaults. The probe performs ONE harmless bounded storage read.
+  await probeExtensionContext();
+  if (quiesced) return;
+
+  let settings: Settings;
+  try {
+    settings = await getSettings();
+  } catch (err) {
+    handleSettingsFailure(err, "bootstrap");
+    return;
+  }
+  if (quiesced) return;
   syncRuntime(settings);
   routeListener.onChange(() => {
     reapplyAfterRouteChange();
@@ -402,37 +545,40 @@ async function bootstrap(): Promise<void> {
   routeListener.start();
 
   if (typeof chrome !== "undefined" && chrome.storage?.onChanged) {
-    chrome.storage.onChanged.addListener((changes, area) => {
+    storageChangeListener = (changes, area) => {
       if (area !== "local") return;
       if (!("settings" in changes)) return;
-      void getSettings().then((s) => {
-        // Fix 5: clear transient state only for relevant changes.
-        const prev = lastSettings;
-        const modeChanged = !!prev && s.sidebar.mode !== prev.sidebar.mode;
-        const disabled = !!prev && prev.enabled && !s.enabled;
-        const writingCopyRelevant =
-          !!prev &&
-          (s.writingCopy.enabled !== prev.writingCopy.enabled ||
-            s.writingCopy.position !== prev.writingCopy.position ||
-            s.writingCopy.shortcutEnabled !== prev.writingCopy.shortcutEnabled ||
-            s.writingCopy.markerEnabled !== prev.writingCopy.markerEnabled ||
-            s.writingCopy.markerColor !== prev.writingCopy.markerColor ||
-            s.writingCopy.markerOpacity !== prev.writingCopy.markerOpacity ||
-            s.writingCopy.pulseEnabled !== prev.writingCopy.pulseEnabled ||
-            s.writingCopy.pulseColor !== prev.writingCopy.pulseColor ||
-            s.writingCopy.pulseIntensity !== prev.writingCopy.pulseIntensity ||
-            s.writingCopy.pulsePeriodMs !== prev.writingCopy.pulsePeriodMs ||
-            s.writingCopy.backgroundEnabled !== prev.writingCopy.backgroundEnabled ||
-            s.theme.writingBlockBackground !== prev.theme.writingBlockBackground);
-        if (modeChanged || disabled) {
-          sidebarController.clearTransient();
-        }
-        if (writingCopyRelevant) {
-          writingCopyController.restore();
-        }
-        syncRuntime(s);
-      });
-    });
+      void getSettings()
+        .then((s) => {
+          // Fix 5: clear transient state only for relevant changes.
+          const prev = lastSettings;
+          const modeChanged = !!prev && s.sidebar.mode !== prev.sidebar.mode;
+          const disabled = !!prev && prev.enabled && !s.enabled;
+          const writingCopyRelevant =
+            !!prev &&
+            (s.writingCopy.enabled !== prev.writingCopy.enabled ||
+              s.writingCopy.position !== prev.writingCopy.position ||
+              s.writingCopy.shortcutEnabled !== prev.writingCopy.shortcutEnabled ||
+              s.writingCopy.markerEnabled !== prev.writingCopy.markerEnabled ||
+              s.writingCopy.markerColor !== prev.writingCopy.markerColor ||
+              s.writingCopy.markerOpacity !== prev.writingCopy.markerOpacity ||
+              s.writingCopy.pulseEnabled !== prev.writingCopy.pulseEnabled ||
+              s.writingCopy.pulseColor !== prev.writingCopy.pulseColor ||
+              s.writingCopy.pulseIntensity !== prev.writingCopy.pulseIntensity ||
+              s.writingCopy.pulsePeriodMs !== prev.writingCopy.pulsePeriodMs ||
+              s.writingCopy.backgroundEnabled !== prev.writingCopy.backgroundEnabled ||
+              s.theme.writingBlockBackground !== prev.theme.writingBlockBackground);
+          if (modeChanged || disabled) {
+            sidebarController.clearTransient();
+          }
+          if (writingCopyRelevant) {
+            writingCopyController.restore();
+          }
+          syncRuntime(s);
+        })
+        .catch((err) => handleSettingsFailure(err, "storageChange"));
+    };
+    chrome.storage.onChanged.addListener(storageChangeListener);
   }
 
   logger.info("content", "Lite UI content script active", {});

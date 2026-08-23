@@ -18,6 +18,9 @@ import {
   type NodeSignature,
   type DeepNode,
 } from "./xray-signature.js";
+import {
+  type RuntimeHealthSnapshot,
+} from "../../shared/runtime-health.js";
 
 /** Top-level report schema (stable). */
 export interface XrayReportV1 {
@@ -68,6 +71,14 @@ export interface XrayReportV1 {
     included: number;
   };
   runtimeState: XrayScan["runtime"];
+  /**
+   * Runtime health authority (additive, schema stays cgl-xray-v1): build/boot
+   * identity, extension-context validity, storage probe result, and the
+   * bounded internal CGL error log. Privacy-safe fields only.
+   */
+  runtimeHealth: RuntimeHealthSnapshot;
+  /** Copy-host pipeline receipt (null when no controller is wired). */
+  writingCopyController: XrayScan["writingCopyController"];
   diagnosis: {
     summary: string;
     firstBlocker: string;
@@ -85,7 +96,15 @@ export function diagnose(
 ): { summary: string; firstBlocker: string } {
   const rt = scan.runtime;
 
-  if (!rt.extensionRuntimeOk) {
+  // PRECEDENCE #0: a dead extension context masks everything else. Never let
+  // WRITING_SAFE_COUNT_N claim success while the runtime is RED.
+  if (rt.extensionRuntimeOk === false) {
+    if (scan.runtimeHealth?.invalidatedLatched) {
+      return {
+        summary: "EXTENSION_CONTEXT_INVALIDATED",
+        firstBlocker: "EXTENSION_RUNTIME_CONTEXT",
+      };
+    }
     return { summary: "EXTENSION_RUNTIME_FAIL", firstBlocker: "EXTENSION_RUNTIME" };
   }
   if (!rt.extensionEnabled || !rt.writingCopyEnabled) {
@@ -235,6 +254,8 @@ export function buildXrayReport(
     actions: scan.actions,
     pickedTarget,
     runtimeState: scan.runtime,
+    runtimeHealth: scan.runtimeHealth,
+    writingCopyController: scan.writingCopyController,
     diagnosis: {
       summary: diagnose(scan).summary,
       firstBlocker: diagnose(scan).firstBlocker,

@@ -4,10 +4,21 @@ import { rmSync, mkdirSync, readFileSync, writeFileSync, existsSync } from "node
 import { deflateSync } from "node:zlib";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { computeBuildIdentity } from "./build-identity.mjs";
 
 const root = dirname(fileURLToPath(import.meta.url));
 const repo = join(root, "..");
 const dist = join(repo, "dist");
+
+// --- build identity ----------------------------------------------------------
+const { buildId, sourceHead, dirtyAtBuild } = computeBuildIdentity(repo);
+console.log(`[build] build-id ${buildId}`);
+
+const BUILD_DEFINES = {
+  __CGL_BUILD_ID__: JSON.stringify(buildId),
+  __CGL_SOURCE_HEAD__: JSON.stringify(sourceHead),
+  __CGL_DIRTY_AT_BUILD__: String(dirtyAtBuild),
+};
 
 // --- minimal PNG encoder (Node builtins only) -------------------------------
 const CRC_TABLE = (() => {
@@ -96,6 +107,7 @@ await build({
   outfile: join(dist, "content/content.js"),
   sourcemap: false,
   minify: false,
+  define: BUILD_DEFINES,
   logLevel: "silent",
 }).catch(fail);
 
@@ -109,6 +121,7 @@ for (const page of ["popup", "options"]) {
     outfile: join(dist, page, `${page}.js`),
     sourcemap: false,
     minify: false,
+    define: BUILD_DEFINES,
     logLevel: "silent",
   }).catch(fail);
 }
