@@ -68,6 +68,7 @@ const xrayController = new XrayController({
   getSettings: () => lastSettings,
   getWritingCopyControllerReceipt: () =>
     writingCopyController.buildReceipt(),
+  getCopyTransaction: () => writingCopyController.lastTransaction,
 });
 const routeListener = new RouteListener();
 

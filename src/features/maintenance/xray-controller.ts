@@ -33,6 +33,7 @@ import { XrayHost, XRAY_HOST_ATTR, type XrayStatusInput } from "./xray-host.js";
 import { isInvalidatedLatched } from "../../shared/runtime-health.js";
 import type {
   WritingCopyControllerReceipt,
+  CopyTransactionReceipt,
 } from "../writing-copy/writing-copy-controller.js";
 
 /** Extension-owned diagnostic paint attributes (X-Ray-only, removed on close). */
@@ -81,6 +82,8 @@ export interface XrayDeps {
    * runtime; optional so unit tests can omit it).
    */
   getWritingCopyControllerReceipt?: () => WritingCopyControllerReceipt | null;
+  /** Live last-copy-transaction accessor (optional; tests may omit). */
+  getCopyTransaction?: () => CopyTransactionReceipt | null;
 }
 
 /** Root class guarding ALL diagnostic paint CSS (present only while active). */
@@ -93,6 +96,9 @@ export class XrayController {
   private readonly getSettings: () => Settings | null;
   private readonly getWritingCopyControllerReceipt:
     | (() => WritingCopyControllerReceipt | null)
+    | null;
+  private readonly getCopyTransaction:
+    | (() => CopyTransactionReceipt | null)
     | null;
 
   private active = false;
@@ -139,6 +145,7 @@ export class XrayController {
     this.getSettings = deps.getSettings;
     this.getWritingCopyControllerReceipt =
       deps.getWritingCopyControllerReceipt ?? null;
+    this.getCopyTransaction = deps.getCopyTransaction ?? null;
   }
 
   // --- state accessors -----------------------------------------------------
@@ -216,6 +223,7 @@ export class XrayController {
         writingCopyEnabled: settings?.writingCopy.enabled ?? false,
       },
       this.getControllerReceipt(),
+      this.getCopyTransactionSafe(),
     );
     this.paint();
     this.host.setStatus(this.statusRows(this.lastScan));
@@ -226,6 +234,16 @@ export class XrayController {
     if (!this.getWritingCopyControllerReceipt) return null;
     try {
       return this.getWritingCopyControllerReceipt();
+    } catch {
+      return null;
+    }
+  }
+
+  /** Live last copy transaction, or null when not wired. */
+  private getCopyTransactionSafe(): CopyTransactionReceipt | null {
+    if (!this.getCopyTransaction) return null;
+    try {
+      return this.getCopyTransaction();
     } catch {
       return null;
     }
@@ -368,6 +386,7 @@ export class XrayController {
         writingCopyEnabled: settings?.writingCopy.enabled ?? false,
       },
       this.getControllerReceipt(),
+      this.getCopyTransactionSafe(),
     );
   }
 
@@ -476,8 +495,29 @@ export class XrayController {
         { k: "safe/tracked/visible", v: `${c.detectedSafeBlockCount}/${c.trackedBlockCount}/${c.visibleBlockCount}` },
         { k: "active block", v: c.activeBlockSelected ? `#${c.activeBlockIndex}` : "none" },
         { k: "host mounted/visible", v: `${c.hostMounted && c.hostConnected}/${c.hostVisible}` },
+        { k: "host status", v: c.hostStatus },
         ...(c.mountBlocker
           ? [{ k: "mount blocker", v: c.mountBlocker, tone: "fail" as const }]
+          : []),
+      );
+    }
+    const tx = scan.copyTransaction;
+    if (tx && tx.attemptCount > 0) {
+      rows.push(
+        { k: "copy attempts", v: String(tx.attemptCount) },
+        { k: "copy trigger", v: tx.trigger },
+        { k: "activation", v: tx.userActivationIsActive == null ? "n/a" : tx.userActivationIsActive ? "active" : "inactive" },
+        { k: "copy strategy", v: tx.strategy ?? "none" },
+        ...(tx.clipboardWriteAttempted
+          ? [{ k: "clipboard write", v: tx.clipboardWriteResolved ? "resolved" : `REJECTED${tx.clipboardErrorName ? ` (${tx.clipboardErrorName})` : ""}`, tone: tx.clipboardWriteResolved ? ("pass" as const) : ("fail" as const) }]
+          : []),
+        ...(tx.durableSaveAttempted
+          ? [{ k: "durable save", v: tx.durableSaveSucceeded ? "ok" : "FAIL", tone: tx.durableSaveSucceeded ? ("pass" as const) : ("fail" as const) }]
+          : [{ k: "durable save", v: "not attempted" }]),
+        { k: "semantic copied", v: String(tx.semanticCopiedApplied) },
+        { k: "ranges after", v: String(tx.copiedRangeCountAfter ?? "?") },
+        ...(tx.failureCode
+          ? [{ k: "failure code", v: tx.failureCode, tone: "fail" as const }]
           : []),
       );
     }

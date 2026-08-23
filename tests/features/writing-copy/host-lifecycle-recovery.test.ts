@@ -348,6 +348,7 @@ describe("copy host lifecycle recovery (apply-before-container -> refresh)", () 
       hostConnected: false,
       hostVisible: false,
       positionMode: "smart",
+      hostStatus: "idle",
       mountBlocker: "HOST_NOT_MOUNTED",
     };
     const scan = runXrayScan(adapter, { enabled: true, writingCopyEnabled: true }, notMounted);
@@ -356,10 +357,11 @@ describe("copy host lifecycle recovery (apply-before-container -> refresh)", () 
     expect(d.summary).toBe("WRITING_COPY_HOST_NOT_MOUNTED");
     expect(d.firstBlocker).toBe("WRITING_COPY_CONTROLLER:HOST_NOT_MOUNTED");
 
-    // Healthy receipt: no invented blocker — the safe-count summary stands.
+    // Healthy receipt: no invented blocker; with NO copy attempt yet the
+    // transaction stage reports READY (never a manufactured failure).
     const healthy: WritingCopyControllerReceipt = { ...notMounted, mountBlocker: null };
     const scan2 = runXrayScan(adapter, { enabled: true, writingCopyEnabled: true }, healthy);
-    expect(diagnose(scan2).summary).toBe("WRITING_SAFE_COUNT_1");
+    expect(diagnose(scan2).summary).toBe("WRITING_COPY_READY");
     expect(diagnose(scan2).firstBlocker).toBe("");
   });
 });

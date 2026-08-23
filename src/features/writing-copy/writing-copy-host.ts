@@ -67,11 +67,15 @@ const HOST_STYLE = `
 
 export type CopyAction = () => void;
 
+/** Fixed host status enum (structural receipt — never scraped from DOM). */
+export type HostStatus = "idle" | "requested" | "copied" | "unavailable" | "none";
+
 export class WritingCopyHost {
   private host: HTMLElement | null = null;
   private button: HTMLButtonElement | null = null;
   private statusEl: HTMLElement | null = null;
   private onClick: CopyAction | null = null;
+  private lastStatus: HostStatus = "idle";
 
   /** True when the host exists in the DOM. */
   get isMounted(): boolean {
@@ -88,6 +92,11 @@ export class WritingCopyHost {
     if (!this.host || !this.host.isConnected) return null;
     const r = this.host.getBoundingClientRect();
     return { w: r.width, h: r.height };
+  }
+
+  /** Last status enum set on the host (structural, never DOM text). */
+  get status(): HostStatus {
+    return this.lastStatus;
   }
 
   /**
@@ -219,7 +228,8 @@ export class WritingCopyHost {
    * value is coerced to a neutral message so copied text can NEVER enter the
    * status region, the DOM, or logs.
    */
-  setStatus(status: "copied" | "requested" | "unavailable" | "idle" | "none"): void {
+  setStatus(status: HostStatus): void {
+    this.lastStatus = status;
     if (!this.statusEl) return;
     switch (status) {
       case "copied":

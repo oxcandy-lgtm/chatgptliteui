@@ -32,6 +32,32 @@ import type { ChatGptAdapter } from "../../adapters/chatgpt-adapter.js";
 
 export type CopyOutcome = "requested" | "copied" | "unavailable";
 
+/** Enumerated copy-stage failure codes (privacy-safe, no messages). */
+export type CopyFailureCode =
+  | "NO_ACTIVE_TARGET"
+  | "TARGET_DISCONNECTED"
+  | "EMPTY_COPY_PAYLOAD"
+  | "CLIPBOARD_API_UNAVAILABLE"
+  | "CLIPBOARD_WRITE_REJECTED"
+  | "COPY_REQUESTED_UNVERIFIED";
+
+/** Which copy strategy produced the outcome. */
+export type CopyStrategy = "original-action" | "clipboard-write";
+
+/** Structured execution result for diagnostics (no text, no stacks). */
+export interface CopyExecutionResult {
+  outcome: CopyOutcome;
+  strategy: CopyStrategy | null;
+  originalActionFound: boolean;
+  payloadNonEmpty: boolean;
+  clipboardApiAvailable: boolean;
+  clipboardWriteAttempted: boolean;
+  clipboardWriteResolved: boolean;
+  /** ONLY error.name (e.g. NotAllowedError); never error.message/stack. */
+  clipboardErrorName: string | null;
+  failureCode: CopyFailureCode | null;
+}
+
 const EXTENSION_HOST_SELECTOR =
   '[data-cgl-writing-copy-host="true"], [data-cgl-sidebar-host="true"], #cgl-sidebar-control-host';
 
@@ -100,42 +126,98 @@ export function extractBlockText(block: HTMLElement): string {
 }
 
 /**
- * Perform the copy from an active user gesture. Returns a promise of the
- * outcome. `getBlock` is called to recalculate/validate the current target
- * immediately before copying.
+ * Perform the copy from an active user gesture, reporting EVERY stage
+ * structurally. `getBlock` is called to recalculate/validate the current
+ * target immediately before copying. No text, no messages, no stacks in the
+ * result — only booleans, enums, and error.name.
+ */
+export async function performCopyDetailed(
+  getBlock: () => HTMLElement | null,
+  adapter: ChatGptAdapter,
+): Promise<CopyExecutionResult> {
+  const result: CopyExecutionResult = {
+    outcome: "unavailable",
+    strategy: null,
+    originalActionFound: false,
+    payloadNonEmpty: false,
+    clipboardApiAvailable: false,
+    clipboardWriteAttempted: false,
+    clipboardWriteResolved: false,
+    clipboardErrorName: null,
+    failureCode: null,
+  };
+
+  const block = getBlock();
+  if (!block) {
+    result.failureCode = "NO_ACTIVE_TARGET";
+    return result;
+  }
+  if (!block.isConnected) {
+    result.failureCode = "TARGET_DISCONNECTED";
+    return result;
+  }
+  if (block.closest(EXTENSION_HOST_SELECTOR)) {
+    result.failureCode = "NO_ACTIVE_TARGET";
+    return result;
+  }
+
+  // Strategy 1: safely associated original copy action.
+  const original = findAssociatedCopyAction(block, adapter);
+  result.originalActionFound = original != null;
+  if (original) {
+    // Invoke the page's own action during the live user gesture. We cannot
+    // verify clipboard success, so report "requested".
+    result.strategy = "original-action";
+    result.outcome = "requested";
+    result.failureCode = "COPY_REQUESTED_UNVERIFIED";
+    original.click();
+    return result;
+  }
+
+  // Strategy 2: Clipboard API fallback from the active gesture.
+  const text = extractBlockText(block);
+  result.payloadNonEmpty = text.length > 0;
+  if (!result.payloadNonEmpty) {
+    result.strategy = "clipboard-write";
+    result.failureCode = "EMPTY_COPY_PAYLOAD";
+    return result;
+  }
+
+  const clipboardAvailable =
+    typeof navigator !== "undefined" && !!navigator.clipboard?.writeText;
+  result.clipboardApiAvailable = clipboardAvailable;
+  if (!clipboardAvailable) {
+    result.strategy = "clipboard-write";
+    result.failureCode = "CLIPBOARD_API_UNAVAILABLE";
+    return result;
+  }
+
+  try {
+    // Single synchronous call from the gesture; await the same promise.
+    result.clipboardWriteAttempted = true;
+    await navigator.clipboard.writeText(text);
+    result.clipboardWriteResolved = true;
+    result.strategy = "clipboard-write";
+    result.outcome = "copied";
+    return result;
+  } catch (err) {
+    result.strategy = "clipboard-write";
+    result.clipboardErrorName =
+      typeof err === "object" && err != null && "name" in err
+        ? String((err as { name: unknown }).name)
+        : null;
+    result.failureCode = "CLIPBOARD_WRITE_REJECTED";
+    return result;
+  }
+}
+
+/**
+ * Compatibility wrapper preserving the original outcome-only contract.
+ * Existing callers and tests keep working; diagnostics use the detailed path.
  */
 export async function performCopy(
   getBlock: () => HTMLElement | null,
   adapter: ChatGptAdapter,
 ): Promise<CopyOutcome> {
-  const block = getBlock();
-  if (!block || !block.isConnected) return "unavailable";
-  if (block instanceof HTMLElement && block.closest(EXTENSION_HOST_SELECTOR))
-    return "unavailable";
-
-  // Strategy 1: safely associated original copy action.
-  const original = findAssociatedCopyAction(block, adapter);
-  if (original) {
-    // Invoke the page's own action during the live user gesture. We cannot
-    // verify clipboard success, so report "requested".
-    original.click();
-    return "requested";
-  }
-
-  // Strategy 2: Clipboard API fallback from the active gesture.
-  const text = extractBlockText(block);
-  if (text.length === 0) return "unavailable";
-
-  if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
-    return "unavailable";
-  }
-  try {
-    // Single synchronous call from the gesture; await the same promise.
-    const writePromise = navigator.clipboard.writeText(text);
-    // No preceding await that would drop activation; the call is made synchronously.
-    await writePromise;
-    return "copied";
-  } catch {
-    return "unavailable";
-  }
+  return (await performCopyDetailed(getBlock, adapter)).outcome;
 }

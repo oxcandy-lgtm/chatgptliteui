@@ -21,6 +21,7 @@ import {
 import {
   type RuntimeHealthSnapshot,
 } from "../../shared/runtime-health.js";
+import type { CopyTransactionReceipt } from "../writing-copy/writing-copy-controller.js";
 
 /** Top-level report schema (stable). */
 export interface XrayReportV1 {
@@ -79,6 +80,8 @@ export interface XrayReportV1 {
   runtimeHealth: RuntimeHealthSnapshot;
   /** Copy-host pipeline receipt (null when no controller is wired). */
   writingCopyController: XrayScan["writingCopyController"];
+  /** Last copy click transaction (null when no controller/attempt). */
+  copyTransaction: CopyTransactionReceipt | null;
   diagnosis: {
     summary: string;
     firstBlocker: string;
@@ -195,6 +198,53 @@ export function diagnose(
     }
   }
 
+  // Causal order position 5: copy TRANSACTION receipt (after host PASS).
+  // No attempt yet -> ready, never a manufactured technical failure.
+  if (wp.safeCount > 0 && scan.writingCopyController) {
+    const tx = scan.copyTransaction;
+    if (!tx || tx.attemptCount === 0) {
+      return { summary: "WRITING_COPY_READY", firstBlocker: "" };
+    }
+
+    const rangeNow =
+      scan.runtime.copiedRangeCount ?? tx.copiedRangeCountAfter ?? 0;
+    const complete =
+      tx.copyOutcome === "copied" &&
+      tx.durableSaveSucceeded &&
+      rt.semanticCopiedCount > 0 &&
+      rangeNow >= 1;
+    if (complete) {
+      return { summary: "REAL_COPYMARKER_GREEN", firstBlocker: "" };
+    }
+
+    // Observation-only reversion: receipt recorded COPIED applied, but the
+    // live semantic state shows the block back at UNCOPIED. No polling.
+    const reverted =
+      tx.semanticCopiedApplied &&
+      rt.semanticCopiedCount === 0 &&
+      rt.semanticUncopiedCount > 0;
+    if (reverted) {
+      return {
+        summary: "COPY_STATE_REVERTED_AFTER_SUCCESS",
+        firstBlocker: "REAL_COPY_TRANSACTION:COPY_STATE_REVERTED_AFTER_SUCCESS",
+      };
+    }
+
+    if (tx.semanticCopiedApplied && rangeNow < 1) {
+      return {
+        summary: "COPYMARKER_RANGE_MISSING",
+        firstBlocker: "REAL_COPY_TRANSACTION:COPYMARKER_RANGE_MISSING",
+      };
+    }
+
+    if (tx.failureCode) {
+      return {
+        summary: `COPY_TRANSACTION_${tx.failureCode}`,
+        firstBlocker: `REAL_COPY_TRANSACTION:${tx.failureCode}`,
+      };
+    }
+  }
+
   return { summary: `WRITING_SAFE_COUNT_${wp.safeCount}`, firstBlocker: "" };
 }
 
@@ -269,6 +319,7 @@ export function buildXrayReport(
     runtimeState: scan.runtime,
     runtimeHealth: scan.runtimeHealth,
     writingCopyController: scan.writingCopyController,
+    copyTransaction: scan.copyTransaction,
     diagnosis: {
       summary: diagnose(scan).summary,
       firstBlocker: diagnose(scan).firstBlocker,

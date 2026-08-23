@@ -42,6 +42,7 @@ import {
 } from "../../shared/runtime-health.js";
 import type {
   WritingCopyControllerReceipt,
+  CopyTransactionReceipt,
 } from "../writing-copy/writing-copy-controller.js";
 
 /** All SelectorTargets probed by the scan, in stable report order. */
@@ -151,6 +152,8 @@ export interface XrayScan {
   runtimeHealth: RuntimeHealthSnapshot;
   /** Copy-host pipeline receipt (null when no controller is wired). */
   writingCopyController: WritingCopyControllerReceipt | null;
+  /** Last copy click transaction (null when no controller/attempt). */
+  copyTransaction: CopyTransactionReceipt | null;
 }
 
 /** Count live ranges held by the extension's copied-marker Highlight. */
@@ -307,6 +310,7 @@ export function runXrayScan(
   adapter: ChatGptAdapter,
   settings: { enabled: boolean; writingCopyEnabled: boolean },
   controller: WritingCopyControllerReceipt | null = null,
+  copyTransaction: CopyTransactionReceipt | null = null,
 ): XrayScan {
   const containerResult = adapter.detectConversationContainer();
   const containerRoot: ParentNode = containerResult.element ?? document;
@@ -479,5 +483,6 @@ export function runXrayScan(
     runtime,
     runtimeHealth: snapshotRuntimeHealth(document),
     writingCopyController: controller,
+    copyTransaction,
   };
 }

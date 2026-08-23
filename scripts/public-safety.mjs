@@ -188,12 +188,15 @@ const RULES = [
     test: (l) => /navigator\.clipboard\.readText|clipboard\.readText|clipboardRead/.test(l),
   },
   // Prohibited clipboard-write permission and execCommand copy fallback.
+  // \b keeps the manifest-permission literal ("clipboardWrite") detected while
+  // allowing longer diagnostic identifiers (clipboardWriteAttempted /
+  // clipboardWriteResolved receipt fields) that are field NAMES, not API use.
   {
     id: "CLIPBOARD_WRITE_OR_EXEC",
     category: "clipboard-write-or-exec",
     only: /\.(ts|tsx|js|mjs|cjs|json)$/,
     test: (l) =>
-      /clipboardWrite|document\.execCommand|execCommand\(/.test(l),
+      /\bclipboardWrite\b|document\.execCommand|execCommand\(/.test(l),
   },
 ];
 // RULES-END: end of the narrow self-exempt rule-declaration block.

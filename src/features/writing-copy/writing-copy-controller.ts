@@ -5,12 +5,13 @@ import {
   WritingCopyTracker,
   type ActiveTargetChange,
 } from "./writing-copy-tracker.js";
-import { WritingCopyHost, HOST_ATTR } from "./writing-copy-host.js";
-import { performCopy } from "./copy-action.js";
+import { WritingCopyHost, HOST_ATTR, type HostStatus } from "./writing-copy-host.js";
+import { performCopyDetailed } from "./copy-action.js";
 import {
   markWritingBlock,
   clearAllWritingCopyMarkers,
   setWritingCopyState,
+  MARKER_WRITING_COPY_STATE,
 } from "./writing-copy-markers.js";
 import { WRITING_COPY_ROOT_CLASSES } from "./writing-copy-state.js";
 import { saveCopiedRecord, getCopiedRecords, removeCopiedRecord } from "./copied-state-store.js";
@@ -66,6 +67,8 @@ export interface WritingCopyControllerReceipt {
   hostConnected: boolean;
   hostVisible: boolean;
   positionMode: string;
+  /** Host's own fixed status enum. */
+  hostStatus: string;
   /** First deterministic blocker, or null when nothing blocks the pipeline. */
   mountBlocker: string | null;
 }
@@ -90,12 +93,110 @@ export function deriveMountBlocker(
   return null;
 }
 
+/**
+ * Copy Transaction Receipt — one bounded, privacy-safe in-memory record that
+ * follows ONE user click end-to-end through every stage. Never persisted,
+ * never transmitted. No raw text, no fingerprint values, no conversation
+ * hashes, no URLs, no stacks — only booleans, enums, indices, error.name.
+ */
+export interface CopyTransactionReceipt {
+  attemptCount: number;
+  attemptId: string;
+  trigger: "host-button" | "keyboard-shortcut";
+  startedAt: number;
+  completedAt: number | null;
+  targetPresent: boolean;
+  targetConnected: boolean;
+  documentFocused: boolean | null;
+  userActivationIsActive: boolean | null;
+  userActivationHasBeenActive: boolean | null;
+  originalActionFound: boolean;
+  strategy: string | null;
+  payloadNonEmpty: boolean;
+  clipboardApiAvailable: boolean;
+  clipboardWriteAttempted: boolean;
+  clipboardWriteResolved: boolean;
+  /** ONLY error.name; never message/stack. */
+  clipboardErrorName: string | null;
+  copyOutcome: "requested" | "copied" | "unavailable" | null;
+  conversationIdentityAvailable: boolean;
+  blockIdentityValid: boolean;
+  turnIndex: number;
+  blockIndex: number;
+  fingerprintSucceeded: boolean;
+  durableSaveAttempted: boolean;
+  durableSaveSucceeded: boolean;
+  semanticCopiedApplied: boolean;
+  visualReconcileRan: boolean;
+  copiedRangeCountAfter: number | null;
+  failureCode: string | null;
+}
+
+function newTransactionReceipt(): CopyTransactionReceipt {
+  return {
+    attemptCount: 0,
+    attemptId: "",
+    trigger: "host-button",
+    startedAt: 0,
+    completedAt: null,
+    targetPresent: false,
+    targetConnected: false,
+    documentFocused: null,
+    userActivationIsActive: null,
+    userActivationHasBeenActive: null,
+    originalActionFound: false,
+    strategy: null,
+    payloadNonEmpty: false,
+    clipboardApiAvailable: false,
+    clipboardWriteAttempted: false,
+    clipboardWriteResolved: false,
+    clipboardErrorName: null,
+    copyOutcome: null,
+    conversationIdentityAvailable: false,
+    blockIdentityValid: false,
+    turnIndex: -1,
+    blockIndex: -1,
+    fingerprintSucceeded: false,
+    durableSaveAttempted: false,
+    durableSaveSucceeded: false,
+    semanticCopiedApplied: false,
+    visualReconcileRan: false,
+    copiedRangeCountAfter: null,
+    failureCode: null,
+  };
+}
+
+/** Structured result of the durable copied-state save (no values, only flags). */
+interface PersistCopiedStateResult {
+  conversationIdentityAvailable: boolean;
+  blockIdentityValid: boolean;
+  turnIndex: number;
+  blockIndex: number;
+  fingerprintSucceeded: boolean;
+  durableSaveAttempted: boolean;
+  durableSaveSucceeded: boolean;
+  /** CONVERSATION_IDENTITY_UNAVAILABLE | BLOCK_IDENTITY_INVALID |
+   *  FINGERPRINT_FAILED | DURABLE_SAVE_FAILED; null on success. */
+  failureCode: string | null;
+}
+
+/** Detailed persistence outcome consumed by the transaction receipt. */
+interface PersistCopiedStateOutcome {
+  result: PersistCopiedStateResult;
+  receiptFields: () => Partial<CopyTransactionReceipt>;
+}
+
 export class WritingCopyController {
   private readonly root: HTMLElement;
   private readonly adapter: ChatGptAdapter;
   private readonly tracker: WritingCopyTracker;
   private readonly host: WritingCopyHost;
   private readonly visuals: WritingCopyVisualState;
+
+  /** Copy Transaction Receipt — current/last click transaction (in-memory). */
+  private tx: CopyTransactionReceipt = newTransactionReceipt();
+  /** Monotonic attempt counter for the receipt. */
+  private attemptCounter = 0;
 
   private enabled = false;
   private position: CopyPosition = "smart";
@@ -149,6 +250,11 @@ export class WritingCopyController {
 
   get target(): HTMLElement | null {
     return this.activeBlock;
+  }
+
+  /** Last (or in-flight) copy transaction receipt. */
+  get lastTransaction(): CopyTransactionReceipt {
+    return this.tx;
   }
 
   get isHostMounted(): boolean {
@@ -312,6 +418,8 @@ export class WritingCopyController {
     const zeroSize = this.host.isMounted && (!size || size.w <= 0 || size.h <= 0);
     const base: Omit<WritingCopyControllerReceipt, "mountBlocker"> & {
       hostZeroSize: boolean;
+      /** Host's own status enum (structural, never DOM-scraped). */
+      hostStatus: HostStatus;
     } = {
       controllerStarted: this.started,
       enabled: this.enabled,
@@ -324,6 +432,7 @@ export class WritingCopyController {
       hostConnected: this.host.isMounted && this.host.renderedSize != null,
       hostVisible: this.host.isVisible,
       positionMode: this.position,
+      hostStatus: this.host.status,
       hostZeroSize: zeroSize,
     };
     return { ...base, mountBlocker: deriveMountBlocker(base) };
@@ -459,28 +568,81 @@ export class WritingCopyController {
 
   // --- copy action ---------------------------------------------------------
 
-  /** Invoked by the Shadow DOM button (a direct user gesture). */
-  private async onCopyRequested(): Promise<void> {
+  /**
+   * Begin a NEW transaction receipt at the FIRST synchronous entry of a click
+   * (or shortcut) — activation state must be captured before any await.
+   */
+  private beginTransaction(trigger: CopyTransactionReceipt["trigger"]): void {
+    this.attemptCounter++;
+    const g = globalThis as unknown as {
+      navigator?: {
+        userActivation?: { isActive: boolean; hasBeenActive: boolean };
+      };
+    };
+    this.tx = {
+      ...newTransactionReceipt(),
+      attemptCount: this.attemptCounter,
+      attemptId: `attempt-${this.attemptCounter}-${Math.random().toString(36).slice(2, 8)}`,
+      trigger,
+      startedAt: Date.now(),
+      documentFocused:
+        typeof document !== "undefined" && typeof document.hasFocus === "function"
+          ? document.hasFocus()
+          : null,
+      userActivationIsActive: g.navigator?.userActivation?.isActive ?? null,
+      userActivationHasBeenActive:
+        g.navigator?.userActivation?.hasBeenActive ?? null,
+    };
+  }
+
+  /** Invoked by the Shadow DOM button or the keyboard shortcut (user gesture). */
+  private async onCopyRequested(
+    trigger: CopyTransactionReceipt["trigger"] = "host-button",
+  ): Promise<void> {
+    // FIRST synchronous entry: new receipt + activation snapshot.
+    this.beginTransaction(trigger);
     this.host.setStatus("idle");
     const target = this.currentSafeTarget();
-    const outcome = await performCopy(
-      () => target,
-      this.adapter,
-    );
-    switch (outcome) {
+    this.tx.targetPresent = target != null;
+    this.tx.targetConnected = !!target?.isConnected;
+
+    const exec = await performCopyDetailed(() => target, this.adapter);
+    this.tx.originalActionFound = exec.originalActionFound;
+    this.tx.strategy = exec.strategy;
+    this.tx.payloadNonEmpty = exec.payloadNonEmpty;
+    this.tx.clipboardApiAvailable = exec.clipboardApiAvailable;
+    this.tx.clipboardWriteAttempted = exec.clipboardWriteAttempted;
+    this.tx.clipboardWriteResolved = exec.clipboardWriteResolved;
+    this.tx.clipboardErrorName = exec.clipboardErrorName;
+    this.tx.copyOutcome = exec.outcome;
+    if (exec.failureCode) this.tx.failureCode = exec.failureCode;
+
+    switch (exec.outcome) {
       case "requested":
         this.host.setStatus("requested");
         break;
       case "copied": {
         this.host.setStatus("copied");
-        const persisted = await this.persistCopiedState(target);
-        // Semantic COPIED requires a valid durable record. The clipboard
-        // operation may still report "Copied." to the host, but without a
-        // durable save (or without valid conversation identity) the block is
-        // NOT claimed as copied — no fake durable success.
-        if (persisted && target) setWritingCopyState(target, "copied");
-        else if (target) setWritingCopyState(target, "uncopied");
+        const persisted = await this.persistCopiedStateDetailed(target);
+        Object.assign(this.tx, persisted.receiptFields());
+        if (persisted.result.durableSaveSucceeded && target) {
+          setWritingCopyState(target, "copied");
+        } else if (target) {
+          setWritingCopyState(target, "uncopied");
+          this.tx.failureCode = persisted.result.failureCode;
+        }
+        // Verify the ACTUAL semantic state; never assume the setter worked.
+        this.tx.semanticCopiedApplied =
+          !!target && target.getAttribute(MARKER_WRITING_COPY_STATE) === "copied";
         this.reconcileVisuals();
+        this.tx.visualReconcileRan = true;
+        this.tx.copiedRangeCountAfter = this.visuals.rangeCount;
+        if (
+          this.tx.semanticCopiedApplied &&
+          (this.tx.copiedRangeCountAfter ?? 0) < 1
+        ) {
+          this.tx.failureCode = "COPYMARKER_RANGE_MISSING";
+        }
         break;
       }
       case "unavailable":
@@ -488,32 +650,79 @@ export class WritingCopyController {
         this.host.setStatus("unavailable");
         break;
     }
+    this.tx.completedAt = Date.now();
   }
 
   /**
-   * Persist the durable copied record for a successfully copied block.
-   *
-   * Resolves `true` ONLY when conversation identity, content fingerprint,
-   * structural identity, and the durable save all succeed. Any failure —
-   * including an invalid route (no conversation token) — resolves `false` and
-   * the caller must not set semantic COPIED. No retries.
+   * Durable-save path reporting WHY it failed. Values stay local; only
+   * booleans/enums/indices are reported. Invariant unchanged: clipboard
+   * success alone NEVER implies semantic COPIED.
    */
-  private async persistCopiedState(target: HTMLElement | null): Promise<boolean> {
-    if (!target) return false;
+  private async persistCopiedStateDetailed(
+    target: HTMLElement | null,
+  ): Promise<PersistCopiedStateOutcome> {
+    const result: PersistCopiedStateResult = {
+      conversationIdentityAvailable: false,
+      blockIdentityValid: false,
+      turnIndex: -1,
+      blockIndex: -1,
+      fingerprintSucceeded: false,
+      durableSaveAttempted: false,
+      durableSaveSucceeded: false,
+      failureCode: null,
+    };
+
+    const fields = (
+      code: string | null,
+    ): Partial<CopyTransactionReceipt> => ({
+      conversationIdentityAvailable: result.conversationIdentityAvailable,
+      blockIdentityValid: result.blockIdentityValid,
+      turnIndex: result.turnIndex,
+      blockIndex: result.blockIndex,
+      fingerprintSucceeded: result.fingerprintSucceeded,
+      durableSaveAttempted: result.durableSaveAttempted,
+      durableSaveSucceeded: result.durableSaveSucceeded,
+      ...(code ? { failureCode: code } : {}),
+    });
+    const fail = (code: string): PersistCopiedStateOutcome => ({
+      result: { ...result, failureCode: code },
+      receiptFields: () => fields(code),
+    });
+
+    if (!target) return fail("BLOCK_IDENTITY_INVALID");
     try {
       const conversationFp = await conversationFingerprintFromLocation();
-      if (!conversationFp) return false;
+      result.conversationIdentityAvailable = conversationFp != null;
+      if (!conversationFp) return fail("CONVERSATION_IDENTITY_UNAVAILABLE");
+
       const identity = deriveBlockIdentity(target, this.adapter);
-      if (identity.turnIndex < 0 || identity.blockIndex < 0) return false;
-      const fingerprint = await fingerprintText(extractBlockText(target));
-      return await saveCopiedRecord(conversationFp, {
+      result.turnIndex = identity.turnIndex;
+      result.blockIndex = identity.blockIndex;
+      result.blockIdentityValid =
+        identity.turnIndex >= 0 && identity.blockIndex >= 0;
+      if (!result.blockIdentityValid) return fail("BLOCK_IDENTITY_INVALID");
+
+      let fingerprint: string;
+      try {
+        fingerprint = await fingerprintText(extractBlockText(target));
+        result.fingerprintSucceeded = true;
+      } catch {
+        return fail("FINGERPRINT_FAILED");
+      }
+
+      result.durableSaveAttempted = true;
+      result.durableSaveSucceeded = await saveCopiedRecord(conversationFp, {
         turnIndex: identity.turnIndex,
         blockIndex: identity.blockIndex,
         fingerprint,
         copiedAt: Date.now(),
       });
+      if (!result.durableSaveSucceeded) return fail("DURABLE_SAVE_FAILED");
+      return { result, receiptFields: () => fields(null) };
     } catch {
-      return false;
+      return fail(
+        result.fingerprintSucceeded ? "DURABLE_SAVE_FAILED" : "FINGERPRINT_FAILED",
+      );
     }
   }
 
@@ -537,7 +746,7 @@ export class WritingCopyController {
     const target = this.currentSafeTarget();
     if (!target) return; // no preventDefault without a safe target
     e.preventDefault();
-    void this.onCopyRequested();
+    void this.onCopyRequested("keyboard-shortcut");
   }
 
   /** Whether the shortcut listener should currently be attached. */
