@@ -197,14 +197,22 @@ export class WritingCopyController {
     this.markSafeBlocks();
     this.visuals.applyPresentation(settings);
     this.applyBackground(settings);
-    this.host.mount(() => void this.onCopyRequested());
-    this.attachGeometryListeners(settings);
+    // ONE shared activation path with refresh(): host mount + geometry
+    // listeners are idempotent, so apply and refresh can never diverge again.
+    this.ensureOperationalSurface();
     this.tracker.refresh();
     this.syncHostToTarget();
     void this.hydrateState().then(() => this.reconcileVisuals());
   }
 
-  /** Re-detect and rebind after SPA route change or structural mutation. */
+  /**
+   * Re-detect and rebind after SPA route change or structural mutation.
+   *
+   * LIFECYCLE RECOVERY: when the first apply() ran before ChatGPT produced a
+   * usable conversation container (host intentionally not mounted), a later
+   * refresh() must complete the activation — mark blocks, ensure the host is
+   * mounted, and ensure geometry listeners exist — before tracker/host sync.
+   */
   refresh(settings: Settings): void {
     if (!this.enabled) return;
     if (!this.adapter.detectConversationContainer().element) {
@@ -214,9 +222,20 @@ export class WritingCopyController {
     this.markSafeBlocks();
     this.visuals.applyPresentation(settings);
     this.applyBackground(settings);
+    this.ensureOperationalSurface();
     this.tracker.refresh();
     this.syncHostToTarget();
     void this.hydrateState().then(() => this.reconcileVisuals());
+  }
+
+  /**
+   * ONE idempotent operational-activation path shared by apply() and
+   * refresh(): exactly one copy host (mounted + click-bound), geometry
+   * listeners attached exactly once. No timers, no polling.
+   */
+  private ensureOperationalSurface(): void {
+    this.host.mount(() => void this.onCopyRequested());
+    this.attachGeometryListeners();
   }
 
   private async hydrateState(): Promise<void> {
@@ -353,12 +372,12 @@ export class WritingCopyController {
 
   // --- smart-position geometry ---------------------------------------------
 
-  /** Attach scroll/resize/visualViewport listeners exactly once. */
-  private attachGeometryListeners(settings: Settings): void {
-    if (!settings.writingCopy.shortcutEnabled) {
-      // Listener attachment is orthogonal to the shortcut; kept unconditional
-      // so smart positioning always tracks geometry while enabled.
-    }
+  /**
+   * Attach scroll/resize/visualViewport listeners EXACTLY ONCE. Idempotent:
+   * repeated apply/refresh never accumulates duplicate callbacks.
+   */
+  private attachGeometryListeners(): void {
+    if (this.geometryListenersAttached) return;
     window.addEventListener("scroll", this.boundGeometryUpdate, { passive: true });
     window.addEventListener("resize", this.boundGeometryUpdate);
     this.geometryListenersAttached = true;

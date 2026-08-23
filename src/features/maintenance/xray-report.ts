@@ -182,6 +182,19 @@ export function diagnose(
       firstBlocker: `GATE_REJECTION:${topReason !== "" ? topReason : "UNKNOWN_AFTER_XRAY"}`,
     };
   }
+  // Causal order position 4: after runtime/root/detection PASS, inspect the
+  // ACTUAL controller receipt. WRITING_SAFE_COUNT_N alone is not success —
+  // a mounted-and-visible copy host is part of the operational pipeline.
+  if (wp.safeCount > 0 && scan.writingCopyController) {
+    const blocker = scan.writingCopyController.mountBlocker;
+    if (blocker != null) {
+      return {
+        summary: `WRITING_COPY_${blocker}`,
+        firstBlocker: `WRITING_COPY_CONTROLLER:${blocker}`,
+      };
+    }
+  }
+
   return { summary: `WRITING_SAFE_COUNT_${wp.safeCount}`, firstBlocker: "" };
 }
 
