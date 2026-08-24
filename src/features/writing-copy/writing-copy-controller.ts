@@ -14,7 +14,7 @@ import {
   MARKER_WRITING_COPY_STATE,
 } from "./writing-copy-markers.js";
 import { WRITING_COPY_ROOT_CLASSES } from "./writing-copy-state.js";
-import { saveCopiedRecord, getCopiedRecords, removeCopiedRecord } from "./copied-state-store.js";
+import { saveCopiedRecord, getCopiedRecords } from "./copied-state-store.js";
 import { fingerprintText } from "./content-fingerprint.js";
 import { extractBlockText } from "./copy-action.js";
 import {
@@ -351,30 +351,69 @@ export class WritingCopyController {
     const records = await getCopiedRecords(conversationFp);
     if (!this.isHydrationCurrent(epoch)) return;
     const blocks = findSafeWritingBlocks(this.adapter);
+
+    // Compute the exact content fingerprint for every current safe block
+    // FIRST, then match on CONTENT IDENTITY. turnIndex/blockIndex are
+    // position HINTS only — they may NEVER override a fingerprint match and
+    // a hydration miss is observation, never proof for deletion.
+    type Entry = {
+      block: HTMLElement;
+      fingerprint: string | null;
+    };
+    const entries: Entry[] = [];
     for (const block of blocks) {
-      if (!this.isHydrationCurrent(epoch) || !block.isConnected) continue;
-      const identity = deriveBlockIdentity(block, this.adapter);
-      if (identity.turnIndex < 0 || identity.blockIndex < 0) continue;
       try {
-        const text = extractBlockText(block);
-        const fingerprint = await fingerprintText(text);
-        // Confirm epoch AND that this block is still connected/current before
-        // applying a marker or deleting stale storage.
-        if (!this.isHydrationCurrent(epoch) || !block.isConnected) return;
-        const rec = records.find(
-          (r) => r.turnIndex === identity.turnIndex && r.blockIndex === identity.blockIndex,
-        );
-        if (rec && rec.fingerprint === fingerprint) {
-          setWritingCopyState(block, "copied");
-        } else {
-          setWritingCopyState(block, "uncopied");
-          if (rec) await removeCopiedRecord(conversationFp, identity.turnIndex, identity.blockIndex);
-        }
+        const fingerprint = await fingerprintText(extractBlockText(block));
+        entries.push({ block, fingerprint });
       } catch {
-        if (!this.isHydrationCurrent(epoch)) return;
-        setWritingCopyState(block, "uncopied");
+        entries.push({ block, fingerprint: null });
       }
+      if (!this.isHydrationCurrent(epoch)) return;
     }
+
+    // Group current blocks by fingerprint; group records by fingerprint.
+    const blocksByFp = new Map<string, Entry[]>();
+    for (const e of entries) {
+      if (!e.fingerprint) continue;
+      const list = blocksByFp.get(e.fingerprint);
+      if (list) list.push(e);
+      else blocksByFp.set(e.fingerprint, [e]);
+    }
+    const recordsByFp = new Map<string, number>();
+    for (const r of records) {
+      recordsByFp.set(r.fingerprint, (recordsByFp.get(r.fingerprint) ?? 0) + 1);
+    }
+
+    for (const e of entries) {
+      if (!this.isHydrationCurrent(epoch) || !e.block.isConnected) continue;
+
+      // Fingerprint unavailable -> UNCOPIED (fail closed), record untouched.
+      if (!e.fingerprint) {
+        setWritingCopyState(e.block, "uncopied");
+        continue;
+      }
+
+      const blockCount = blocksByFp.get(e.fingerprint)?.length ?? 0;
+      const recordCount = recordsByFp.get(e.fingerprint) ?? 0;
+
+      let copied: boolean;
+      if (blockCount === 1) {
+        // Normal real case: unique content identity matches regardless of
+        // current position. Position hints are ignored entirely here.
+        copied = recordCount >= 1;
+      } else if (blockCount === recordCount) {
+        // Duplicate content with EQUAL durable evidence: the whole group is
+        // legitimately copied. No need to distinguish identical blocks.
+        copied = true;
+      } else {
+        // Ambiguous duplicates (unequal counts): fail closed — no positional
+        // guessing. Persisted records remain untouched.
+        copied = false;
+      }
+      setWritingCopyState(e.block, copied ? "copied" : "uncopied");
+    }
+    // NOTE: no storage mutation anywhere in hydration. History cleanup is
+    // not hydration's job (Options "Clear copy history" stays the only path).
   }
 
   /** Whether the given hydration generation is still authoritative. */

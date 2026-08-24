@@ -64,10 +64,19 @@ export async function getCopiedRecords(
 /**
  * Persist a copied record and report REAL success.
  *
- * Returns `true` only when the durable write actually succeeded. The caller
- * must treat semantic COPIED state as valid ONLY when this resolves `true` —
- * a successful clipboard copy with a failed durable save is never reported as
- * durably copied. No retries.
+ * IDENTITY SEMANTICS: `turnIndex`/`blockIndex` are POSITION HINTS for
+ * diagnostics/locality only — never durable identity. The same slot holding a
+ * DIFFERENT fingerprint is a DIFFERENT logical block, so position alone can
+ * NEVER cause an overwrite (the old record is preserved and the new one is
+ * appended).
+ *
+ * Same-fingerprint handling:
+ *  - exactly one existing record with that fingerprint -> refresh its
+ *    position hints + copiedAt in place;
+ *  - multiple same-fingerprint records -> update only on an EXACT unique
+ *    position match; otherwise append (never delete/replace another).
+ *
+ * Returns `true` only when the durable write actually succeeded. No retries.
  */
 export async function saveCopiedRecord(
   conversationFingerprint: string,
@@ -79,11 +88,48 @@ export async function saveCopiedRecord(
   }
   try {
     const list = await getCopiedRecords(conversationFingerprint);
-    const idx = list.findIndex(
-      (r) => r.turnIndex === record.turnIndex && r.blockIndex === record.blockIndex,
-    );
-    if (idx >= 0) list[idx] = record;
-    else list.push(record);
+
+    const sameFpIdx: number[] = [];
+    for (let i = 0; i < list.length; i++) {
+      const r = list[i];
+      if (r && r.fingerprint === record.fingerprint) sameFpIdx.push(i);
+    }
+
+    if (sameFpIdx.length === 1) {
+      // Unique content match: refresh hints + timestamp, keep one record.
+      const i = sameFpIdx[0] as number;
+      const existing = list[i] as CopiedRecord;
+      list[i] = {
+        ...existing,
+        turnIndex: record.turnIndex,
+        blockIndex: record.blockIndex,
+        copiedAt: record.copiedAt,
+      };
+    } else {
+      let exactPosIdx = -1;
+      for (const i of sameFpIdx) {
+        const r = list[i] as CopiedRecord;
+        if (
+          r.turnIndex === record.turnIndex &&
+          r.blockIndex === record.blockIndex
+        ) {
+          if (exactPosIdx >= 0) {
+            exactPosIdx = -1; // exact position not unique
+            break;
+          }
+          exactPosIdx = i;
+        }
+      }
+      if (sameFpIdx.length === 0 || exactPosIdx < 0) {
+        // Different fingerprint at any slot (including the old slot), or
+        // ambiguous duplicates: APPEND. Never overwrite/delete another.
+        list.push(record);
+      } else {
+        const existing = list[exactPosIdx] as CopiedRecord;
+        list[exactPosIdx] = { ...existing, copiedAt: record.copiedAt };
+      }
+    }
+
     await store.set({ [storageKey(conversationFingerprint)]: list });
     return true;
   } catch {

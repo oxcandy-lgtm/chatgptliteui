@@ -350,9 +350,20 @@ describe("persistent state spine — authoritative RUN", () => {
       expect(stateOf("block-b")).toBe("uncopied");
       expect(stateOf("block-a")).toBe("uncopied");
       const afterEdit = storage.map.get(keyA) as unknown[];
+      // NON-DESTRUCTIVE HYDRATION CONTRACT: an edit flips the live block to
+      // UNCOPIED (asserted above) but hydration NEVER deletes history by
+      // position. The ORIGINAL copied record survives untouched, and no new
+      // record is fabricated for the changed content.
+      const fpOriginal = await fingerprintText(TEXT_B_ORIGINAL);
+      const fpChanged = await fingerprintText(TEXT_B_CHANGED);
       expect(
         afterEdit.some(
-          (r) => (r as { turnIndex: number }).turnIndex === 1,
+          (r) => (r as { fingerprint: string }).fingerprint === fpOriginal,
+        ),
+      ).toBe(true);
+      expect(
+        afterEdit.some(
+          (r) => (r as { fingerprint: string }).fingerprint === fpChanged,
         ),
       ).toBe(false);
       // No raw previous/current text exists in storage.
