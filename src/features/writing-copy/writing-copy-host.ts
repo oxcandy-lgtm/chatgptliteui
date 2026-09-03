@@ -10,10 +10,10 @@
  *  - a single circular copy BUBBLE (44px true circle, inline SVG copy icon,
  *    aria-label "Copy centered writing block", type="button", visible focus
  *    style). No visible "Copy" text: the bubble never grows with status;
- *  - one small drag HANDLE on the bubble's upper-right edge (grip dots,
- *    cursor grab/grabbing, aria-label "Move copy button"). Pointer drag on the
- *    handle MOVES the bubble; clicking the bubble COPIES. The two interactions
- *    never cross;
+ *  - one INVISIBLE drag hit-zone on the bubble's upper-right edge (16px,
+ *    fully transparent, no decoration; hover affordance is the `move` cursor
+ *    alone, aria-label "Move copy button"). Pointer drag on the zone MOVES
+ *    the bubble; clicking the bubble COPIES. The two interactions never cross;
  *  - a contained status region (role="status", aria-live="polite") that is
  *    visually hidden (accessibility-only) and MAY only ever show the fixed
  *    strings: "Copied.", "Copy requested.", "Copy unavailable.",
@@ -39,8 +39,8 @@ const STATUS_IDLE = "Nothing safe to copy.";
 
 /** Visible copy bubble diameter (true circle at every viewport width). */
 export const COPY_BUBBLE_PX = 44;
-/** Drag-handle diameter on the bubble's upper-right edge. */
-export const COPY_HANDLE_PX = 14;
+/** Drag hit-zone diameter on the bubble's upper-right edge. */
+export const COPY_HANDLE_PX = 16;
 /** Extension-owned layer: strictly above the normal X-Ray panel. */
 export const COPY_HOST_Z_INDEX = 2147483647;
 
@@ -87,22 +87,22 @@ const HOST_STYLE = `
   }
   .cgl-drag-handle {
     position: absolute;
-    top: -6px;
-    right: -6px;
-    width: 14px;
-    height: 14px;
-    border-radius: 50%;
-    background-color: #2a3142;
-    background-image: radial-gradient(circle, #8fa0b8 1px, transparent 1.3px);
-    background-size: 5px 5px;
-    background-position: center;
-    border: 1px solid #4c5a76;
-    cursor: grab;
+    top: -4px;
+    right: -4px;
+    width: 16px;
+    height: 16px;
+    border-radius: 4px;
+    background: transparent;
+    background-image: none;
+    border: 0;
+    box-shadow: none;
+    opacity: 0;
+    cursor: move;
     touch-action: none;
     padding: 0;
   }
   .cgl-drag-handle.cgl-dragging {
-    cursor: grabbing;
+    cursor: move;
   }
   .cgl-copy-status {
     margin-top: 4px;

@@ -10,9 +10,10 @@ import { XrayHost } from "../../../src/features/maintenance/xray-host.js";
  * Draggable circular copy bubble.
  *
  * Contract: one 44px true-circle bubble with an inline SVG copy icon (no
- * visible "Copy" text), one upper-right drag handle (pointer drag moves,
- * never copies), session-local manual offset added to the smart position and
- * clamped onscreen, and a z-layer strictly above the normal X-Ray panel.
+ * visible "Copy" text), one invisible upper-right drag hit-zone (hover
+ * affordance is the `move` cursor alone), session-local manual offset added
+ * to the smart position and clamped onscreen, and a z-layer strictly above
+ * the normal X-Ray panel.
  */
 
 function installDom(): JSDOM {
@@ -110,17 +111,25 @@ describe("draggable copy bubble", () => {
     expect(btn.textContent).toBe("");
   });
 
-  it("exactly one upper-right drag handle exists with grab cursors", () => {
+  it("exactly one invisible upper-right drag hit-zone exists with move cursor", () => {
     dom = installDom();
     new WritingCopyHost().mount(() => {});
     const handles = shadowOf(dom).querySelectorAll(".cgl-drag-handle");
     expect(handles.length).toBe(1);
     expect(handles[0]!.getAttribute("aria-label")).toBe("Move copy button");
     const css = styleText(dom);
-    expect(css).toContain("top: -6px");
-    expect(css).toContain("right: -6px");
-    expect(css).toContain("cursor: grab");
-    expect(css).toContain("cursor: grabbing");
+    expect(css).toContain("top: -4px");
+    expect(css).toContain("right: -4px");
+    expect(css).toContain("width: 16px");
+    expect(css).toContain("height: 16px");
+    // No permanent decoration: fully transparent, no dots/nub/border.
+    expect(css).toContain("background: transparent");
+    expect(css).toContain("background-image: none");
+    expect(css).toContain("opacity: 0");
+    expect(css).not.toContain("radial-gradient");
+    // Hover/drag affordance is the cursor alone.
+    expect(css).toContain("cursor: move");
+    expect(css).not.toContain("grab");
   });
 
   it("status region stays accessibility-only (visually hidden, live region intact)", () => {
