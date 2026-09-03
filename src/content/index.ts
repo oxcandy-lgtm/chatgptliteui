@@ -302,14 +302,17 @@ function isExtensionHost(node: Node): boolean {
 
 /**
  * Route-settle guard (Phase 4 revisit fix): set synchronously on every route
- * change. While set, the structural observer stays rooted at document.body —
- * the async re-apply may otherwise pin it to the OUTGOING conversation
+ * change. While set, the structural observer rooting prefers document.body —
+ * the async re-apply must never pin the observer to the OUTGOING conversation
  * container (still connected at that instant), which React then removes. An
  * observer on a detached root never sees the incoming conversation render, so
  * no refresh — and therefore no copied-state hydration — would ever be
- * re-driven. Cleared the moment narrowing adopts a non-body root for the new
- * route. Staying on body is always the safe fallback (identical to the
- * long-standing no-container behavior).
+ * re-driven. The guard is enforced BOTH synchronously in
+ * `reapplyAfterRouteChange()` (immediate broaden to `document.body`) AND in
+ * `connectObserver()` for the later async re-apply. It is cleared the moment
+ * narrowing adopts a non-body root for the new route. Staying on body is
+ * always the safe fallback (identical to the long-standing no-container
+ * behavior).
  */
 let preferBroadRoot = false;
 
@@ -463,19 +466,29 @@ function teardown(): void {
 /** Re-apply after a route change: restore markers, refresh, re-sync. */
 function reapplyAfterRouteChange(): void {
   if (quiesced) return;
+  // Settle guard FIRST, and broaden the observer SYNCHRONOUSLY (before the
+  // async settings re-apply below resolves): the old narrowed observer must
+  // not remain attached during the React replacement window. `lastSettings`
+  // is the already-validated active snapshot — no new storage read is needed
+  // merely to broaden. `connectObserver()` replaces the target through its
+  // existing idempotent path WITHOUT bumping `observerEpoch` (that would
+  // discard the detecting batch); combined with the guard, the later async
+  // `syncRuntime()` also roots at `document.body` instead of the outgoing
+  // container. Narrowing adopts the new route's container on the next
+  // structural batch and clears the guard.
+  preferBroadRoot = true;
+  if (
+    lastSettings &&
+    lastSettings.enabled &&
+    hasRuntimeEffects(lastSettings)
+  ) {
+    connectObserver(lastSettings);
+  }
   applier.restore();
   sidebarController.restore();
   writingCopyController.restore();
   xrayController.stop(); // X-Ray is page-local; a route change closes it.
   adapter.refresh();
-  // Settle guard for the async re-apply below: while set, observer rooting
-  // prefers document.body so the re-apply can never pin the observer to the
-  // outgoing (still-connected, soon-removed) container. The narrowing step
-  // adopts the new route's container on the next structural batch and clears
-  // the guard. Deliberately NO observer surgery here: disconnecting would bump
-  // the observer epoch and discard the very batch that detected the route —
-  // the batch that can adopt an already-rendered new root immediately.
-  preferBroadRoot = true;
   applyCurrent();
 }
 

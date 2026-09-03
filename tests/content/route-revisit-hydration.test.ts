@@ -71,6 +71,21 @@ class FakeHighlight {
   constructor(..._ranges: unknown[]) {}
 }
 
+/** History-API navigation signal (pushState-style commits fire no popstate). */
+class FakeNavigation {
+  listeners = new Map<string, Set<() => void>>();
+  addEventListener(type: string, cb: () => void): void {
+    if (!this.listeners.has(type)) this.listeners.set(type, new Set());
+    this.listeners.get(type)!.add(cb);
+  }
+  removeEventListener(type: string, cb: () => void): void {
+    this.listeners.get(type)?.delete(cb);
+  }
+  dispatch(type: string): void {
+    for (const cb of [...(this.listeners.get(type) ?? [])]) cb();
+  }
+}
+
 const C1_HTML = (a: string, b: string): string =>
   `<main role="main"><section data-testid="thread" aria-label="conversation">` +
   `<div data-message-author-role="assistant" data-testid="assistant-message">` +
@@ -118,13 +133,30 @@ describe("route revisit hydration (C1 -> C2 -> C1)", () => {
   let settings: Settings;
   let store: Map<string, unknown>;
   let highlightRegistry: Map<string, unknown>;
+  let navigation: FakeNavigation;
   let originalGlobals: Record<string, unknown>;
+  /** Deferred settings reads (regression 2): parked resolvers. */
+  let settingsGate: Array<(v: Record<string, unknown>) => void> | null;
+  /** Gated history keys (rapid test): parked resolvers. */
+  let historyGateKeys: Set<string>;
+  let historyGateWaiters: Array<() => void>;
+  let historyGateHits: number;
 
   const stateOf = (id: string): string | null =>
     dom.window.document.getElementById(id)?.getAttribute(STATE_ATTR) ?? null;
 
   const historyKeys = (): string[] =>
     [...store.keys()].filter((k) => k.startsWith(HISTORY_PREFIX));
+
+  /**
+   * Real SPA navigation: pushState-style URL commit (NO popstate, NO
+   * pageshow) followed by the Navigation API commit signal. The route
+   * lifecycle itself — not a manual reapply call — must drive recovery.
+   */
+  const navigate = (path: string): void => {
+    dom.window.history.pushState({}, "", path);
+    navigation.dispatch("currententrychange");
+  };
 
   function installDom(url: string, html: string): void {
     dom = new JSDOM(`<!doctype html><html><body>${html}</body></html>`, {
@@ -148,6 +180,15 @@ describe("route revisit hydration (C1 -> C2 -> C1)", () => {
     win.CSS = { highlights: highlightRegistry };
     Object.defineProperty(dom.window, "innerHeight", { value: 600, configurable: true });
     Object.defineProperty(dom.window, "innerWidth", { value: 1000, configurable: true });
+    navigation = new FakeNavigation();
+    try {
+      (dom.window as unknown as Record<string, unknown>).navigation = navigation;
+    } catch {
+      Object.defineProperty(dom.window, "navigation", {
+        value: navigation,
+        configurable: true,
+      });
+    }
     const envelope = { schemaVersion: 3, settings };
     g.chrome = {
       storage: {
@@ -157,8 +198,27 @@ describe("route revisit hydration (C1 -> C2 -> C1)", () => {
             const keys = Array.isArray(k) ? k : [k];
             const out: Record<string, unknown> = {};
             for (const key of keys) {
-              if (key === "settings") out[key] = envelope;
-              else if (store.has(key)) out[key] = store.get(key);
+              if (key === "settings") {
+                if (settingsGate) {
+                  return new Promise<Record<string, unknown>>((resolve) => {
+                    settingsGate!.push(() => resolve({ settings: envelope }));
+                  });
+                }
+                out[key] = envelope;
+              } else if (store.has(key)) {
+                out[key] = store.get(key);
+              } else if (historyGateKeys.has(key)) {
+                // Park even a MISS: the resolver snapshots the store lazily so
+                // a record written while parked is still observed on release.
+                historyGateHits++;
+                return new Promise<Record<string, unknown>>((resolve) => {
+                  historyGateWaiters.push(() => {
+                    const payload: Record<string, unknown> = {};
+                    if (store.has(key)) payload[key] = store.get(key);
+                    resolve(payload);
+                  });
+                });
+              }
             }
             return Promise.resolve(out);
           },
@@ -193,6 +253,10 @@ describe("route revisit hydration (C1 -> C2 -> C1)", () => {
     settings = makeSettings();
     store = new Map<string, unknown>();
     highlightRegistry = new Map<string, unknown>();
+    settingsGate = null;
+    historyGateKeys = new Set<string>();
+    historyGateWaiters = [];
+    historyGateHits = 0;
     FakeMutationObserver.last = null;
   });
 
@@ -237,8 +301,8 @@ describe("route revisit hydration (C1 -> C2 -> C1)", () => {
     expect(mod.writingCopyController.visualLayer.rangeCount).toBe(1);
 
     // ---- travel to C2 while the OLD C1 DOM is still connected (the race) ----
-    dom.window.history.pushState({}, "", "/c/conv-two");
-    mod.reapplyAfterRouteChange();
+    // NO popstate, NO pageshow, NO mutation: Navigation API commit only.
+    navigate("/c/conv-two");
     // Core regression: once the async re-apply settles, the observer must sit
     // on document.body — NOT on the outgoing (still-connected) container that
     // React is about to remove. A dead root would never see the C2 render.
@@ -254,9 +318,10 @@ describe("route revisit hydration (C1 -> C2 -> C1)", () => {
     expect(historyKeys()).toEqual([keyC1]);
 
     // ---- return to C1: skeleton first (early hydration finds nothing) ----
-    dom.window.history.pushState({}, "", "/c/conv-one");
+    navigate("/c/conv-one");
     dom.window.document.body.innerHTML = SKELETON_HTML;
-    mod.reapplyAfterRouteChange();
+    // NOTE: the skeleton swap races the navigation signal either way; the
+    // body root observes both orders. Settle, then require the broad root.
     await settle();
     expect(FakeMutationObserver.last?.target).toBe(dom.window.document.body);
     // Vulnerable window: the re-apply's hydration ran against the skeleton
@@ -287,6 +352,97 @@ describe("route revisit hydration (C1 -> C2 -> C1)", () => {
         .getAttribute("data-visible"),
     ).not.toBe("true");
     // Cross-route isolation both directions; C1 key untouched.
+    expect(historyKeys()).toEqual([keyC1]);
+  });
+
+  it("observer broadens synchronously, before deferred settings resolve", { timeout: 30000 }, async () => {
+    vi.resetModules();
+    installDom("https://chatgpt.com/c/conv-one", C1_HTML(TEXT_A, TEXT_B));
+    mod = await import("../../src/content/index.js");
+    mod.syncRuntime(settings);
+    await settle();
+    // Steady state on C1: observer narrowed to the live container (main).
+    const container = dom.window.document.querySelector('main[role="main"]')!;
+    expect(FakeMutationObserver.last?.target).toBe(container);
+
+    // Park every future settings read: the async re-apply cannot proceed.
+    settingsGate = [];
+    navigate("/c/conv-two");
+    // REGRESSION 2: BEFORE settings resolve, the observer must already sit
+    // on document.body — not on the outgoing C1 container. Fails on 3bf61cb
+    // (flag-only: the move waited for the parked getSettings()).
+    expect(FakeMutationObserver.last?.target).toBe(dom.window.document.body);
+    expect(settingsGate).toHaveLength(1);
+
+    // Release: the re-apply completes against the still-present C1 DOM, now
+    // under the C2 route identity (fail-closed per-route states, no leak).
+    for (const resolve of settingsGate)
+      resolve({ settings: { schemaVersion: 3, settings } });
+    settingsGate = null;
+    await until(() => stateOf("block-a") === "uncopied");
+
+    // The incoming C2 render is still observed (body root survived) and the
+    // narrowing adopts the replacement container.
+    dom.window.document.body.innerHTML = C2_HTML(TEXT_C);
+    const c2block = dom.window.document.getElementById("block-c")!;
+    FakeMutationObserver.last!.trigger([c2block]);
+    await until(() => stateOf("block-c") === "uncopied");
+    expect(FakeMutationObserver.last?.target).not.toBe(dom.window.document.body);
+  });
+
+  it("rapid C1 -> C2 -> C1 resolves stale hydrations to the final route only", { timeout: 30000 }, async () => {
+    vi.resetModules();
+    installDom("https://chatgpt.com/c/conv-one", C1_HTML(TEXT_A, TEXT_B));
+    const { conversationFingerprintFromLocation } = await import(
+      "../../src/features/writing-copy/block-identity.js"
+    );
+    const fpC1 = await conversationFingerprintFromLocation();
+    expect(fpC1).toMatch(/^[0-9a-f]{32}$/);
+    const keyC1 = HISTORY_PREFIX + fpC1;
+    store.set(keyC1, [
+      {
+        turnIndex: 0,
+        blockIndex: 0,
+        fingerprint: await fingerprintText(TEXT_A),
+        copiedAt: Date.now(),
+      },
+    ]);
+    mod = await import("../../src/content/index.js");
+    mod.syncRuntime(settings);
+    await until(() => stateOf("block-a") === "copied");
+    expect(mod.writingCopyController.visualLayer.rangeCount).toBe(1);
+
+    // Park the C2 history read so the C2 hydration parks mid-flight.
+    dom.window.history.pushState({}, "", "/c/conv-two");
+    const fpC2 = await conversationFingerprintFromLocation();
+    const keyC2 = HISTORY_PREFIX + fpC2;
+    historyGateKeys.add(keyC2);
+    navigation.dispatch("currententrychange");
+    dom.window.document.body.innerHTML = C2_HTML(TEXT_C);
+    FakeMutationObserver.last!.trigger([
+      dom.window.document.getElementById("block-c")!,
+    ]);
+    await until(() => historyGateHits > 0);
+
+    // Back to C1 while C2's hydration is still parked: final-route hydration
+    // must win; the stale C2 result must never mutate C1 state on release.
+    navigate("/c/conv-one");
+    dom.window.document.body.innerHTML = C1_HTML(TEXT_A, TEXT_B);
+    FakeMutationObserver.last!.trigger([
+      dom.window.document.getElementById("block-a")!,
+      dom.window.document.getElementById("block-b")!,
+    ]);
+    await until(() => stateOf("block-a") === "copied");
+    expect(stateOf("block-b")).toBe("uncopied");
+
+    for (const release of historyGateWaiters) release();
+    historyGateWaiters = [];
+    historyGateKeys.clear();
+    await settle();
+    await settle();
+    expect(stateOf("block-a")).toBe("copied");
+    expect(stateOf("block-b")).toBe("uncopied");
+    expect(mod.writingCopyController.visualLayer.rangeCount).toBe(1);
     expect(historyKeys()).toEqual([keyC1]);
   });
 });
