@@ -404,7 +404,7 @@ describe("Phase 4 visual + smart UI — authoritative RUN", () => {
 
     const vw = (): number =>
       parseInt(hostEl.style.left, 10) +
-      (hostEl.getBoundingClientRect().width || 80);
+      (hostEl.getBoundingClientRect().width || 44);
 
     // 1. plenty of right-side room -> button outside-right
     const roomy = makeBlock({ top: 100, bottom: 300, left: 0, right: 300, width: 300, height: 200 });
@@ -413,7 +413,7 @@ describe("Phase 4 visual + smart UI — authoritative RUN", () => {
     expect(leftOutside).toBe(300 + 6); // rect.right + margin
 
     // 2. insufficient right room -> inside-right fallback
-    // rect.right 300 + margin 6 + hostW 80 = 386 > vw(340) - margin 6.
+    // rect.right 300 + margin 6 + bubble 44 = 350 > vw(340) - margin 6.
     Object.defineProperty(dom.window, "innerWidth", { value: 340, configurable: true });
     host.positionAgainst(roomy, "smart");
     const leftInside = parseInt(hostEl.style.left, 10);
@@ -426,9 +426,9 @@ describe("Phase 4 visual + smart UI — authoritative RUN", () => {
     const l = parseInt(hostEl.style.left, 10);
     const t = parseInt(hostEl.style.top, 10);
     expect(l).toBeGreaterThanOrEqual(6);
-    expect(l).toBeLessThanOrEqual(200 - 80 - 6);
+    expect(l).toBeLessThanOrEqual(200 - 44 - 6);
     expect(t).toBeGreaterThanOrEqual(6);
-    expect(t).toBeLessThanOrEqual(300 - 32 - 6);
+    expect(t).toBeLessThanOrEqual(300 - 44 - 6);
 
     // 4. tall block partly offscreen -> button stays visible (Y clamped)
     Object.defineProperty(dom.window, "innerWidth", { value: 1200, configurable: true });
@@ -436,7 +436,7 @@ describe("Phase 4 visual + smart UI — authoritative RUN", () => {
     host.positionAgainst(tall, "smart");
     const tTall = parseInt(hostEl.style.top, 10);
     expect(tTall).toBeGreaterThanOrEqual(6);
-    expect(tTall).toBeLessThanOrEqual(600 - 32 - 6);
+    expect(tTall).toBeLessThanOrEqual(600 - 44 - 6);
 
     // 5+6. repositioning on resize/scroll follows the correct block; one host.
     expect(
@@ -468,7 +468,7 @@ describe("Phase 4 visual + smart UI — authoritative RUN", () => {
     host.positionAgainst(block, "smart");
     // Clamped to the 360-wide visual viewport, not innerWidth (1024 default).
     const l = parseInt(hostEl.style.left, 10);
-    expect(l).toBeLessThanOrEqual(360 - 80 - 6);
+    expect(l).toBeLessThanOrEqual(360 - 44 - 6);
     delete g.visualViewport;
     host.unmount();
   });

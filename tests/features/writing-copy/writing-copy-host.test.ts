@@ -136,8 +136,8 @@ describe("writing-copy Shadow DOM host", () => {
     const left = parseInt(h.style.left, 10);
     expect(top).toBeGreaterThanOrEqual(6);
     expect(left).toBeGreaterThanOrEqual(6);
-    expect(top).toBeLessThanOrEqual(300 - 32 - 6);
-    expect(left).toBeLessThanOrEqual(400 - 80 - 6);
+    expect(top).toBeLessThanOrEqual(300 - 44 - 6);
+    expect(left).toBeLessThanOrEqual(400 - 44 - 6);
   });
 
   it("target classes and inline styles remain unchanged", () => {

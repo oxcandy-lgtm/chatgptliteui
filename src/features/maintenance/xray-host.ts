@@ -35,7 +35,7 @@ const HOST_STYLE = `
     border: 2px solid cyan;
   }
   .xray-panel {
-    position: fixed; top: 44px; right: 12px; z-index: 2147483647;
+    position: fixed; top: 44px; right: 12px; z-index: 2147483646;
     width: 300px; max-height: calc(100vh - 70px); overflow: auto;
     background: #14181f; color: #d7dde8;
     border: 2px solid #ff00ff; border-radius: 8px; padding: 10px;

@@ -7,20 +7,29 @@
  * the shared structural MutationObserver can ignore it (no mutation loop).
  *
  * The host shows:
- *  - a single button (aria-label "Copy centered writing block", type="button",
- *    visible focus style);
- *  - a contained status region (role="status", aria-live="polite") that MAY
- *    only ever show the fixed strings: "Copied.", "Copy requested.",
- *    "Copy unavailable.", "Nothing safe to copy." — never copied text, titles,
- *    URLs, or excerpts.
+ *  - a single circular copy BUBBLE (44px true circle, inline SVG copy icon,
+ *    aria-label "Copy centered writing block", type="button", visible focus
+ *    style). No visible "Copy" text: the bubble never grows with status;
+ *  - one small drag HANDLE on the bubble's upper-right edge (grip dots,
+ *    cursor grab/grabbing, aria-label "Move copy button"). Pointer drag on the
+ *    handle MOVES the bubble; clicking the bubble COPIES. The two interactions
+ *    never cross;
+ *  - a contained status region (role="status", aria-live="polite") that is
+ *    visually hidden (accessibility-only) and MAY only ever show the fixed
+ *    strings: "Copied.", "Copy requested.", "Copy unavailable.",
+ *    "Nothing safe to copy." — never copied text, titles, URLs, or excerpts.
  *
- * Position modes (top-right / middle-right / bottom-right) position the host
- * relative to the active block's right edge using fixed positioning computed
- * from getBoundingClientRect, clamped within the viewport. The target element
- * itself is never modified.
+ * Position model: `positionAgainst` computes the normal smart position against
+ * the active block's right edge (fixed positioning from getBoundingClientRect,
+ * clamped within the viewport), then adds the session-local manual drag
+ * OFFSET (`final = smart + offset`), clamped so the full circle stays onscreen.
+ * The offset survives active-target changes; it resets only on teardown.
+ *
+ * Layering: the host sits ABOVE the normal X-Ray panel so the bubble stays
+ * reachable while X-Ray is open (diagnostic overlays are pointer-transparent).
  *
  * Repeated apply never creates duplicate hosts; teardown removes the host,
- * events, and timers.
+ * drag state, events, and timers.
  */
 
 const HOST_ID = "cgl-writing-copy-host";
@@ -28,27 +37,72 @@ const HOST_ATTR = "data-cgl-writing-copy-host";
 import { stampBootId } from "../../shared/runtime-health.js";
 const STATUS_IDLE = "Nothing safe to copy.";
 
+/** Visible copy bubble diameter (true circle at every viewport width). */
+export const COPY_BUBBLE_PX = 44;
+/** Drag-handle diameter on the bubble's upper-right edge. */
+export const COPY_HANDLE_PX = 14;
+/** Extension-owned layer: strictly above the normal X-Ray panel. */
+export const COPY_HOST_Z_INDEX = 2147483647;
+
+const COPY_ICON_SVG =
+  `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">` +
+  `<rect x="9" y="9" width="11" height="11" rx="2.5" fill="none" stroke="currentColor" stroke-width="2"/>` +
+  `<path d="M5.5 15h-1a2 2 0 0 1-2-2V5.5a2 2 0 0 1 2-2H12a2 2 0 0 1 2 2v1" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>` +
+  `</svg>`;
+
 const HOST_STYLE = `
   :host {
     position: fixed;
-    z-index: 2147483645;
+    z-index: 2147483647;
     display: none;
     font: 600 12px/1.2 system-ui, sans-serif;
+    user-select: none;
+    -webkit-user-select: none;
   }
   :host([data-visible="true"]) { display: block; }
-  .cgl-copy-btn {
+  .cgl-copy-bubble {
     box-sizing: border-box;
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0;
     border: 1px solid #2a3142;
     background: #1c2230;
     color: #e7eaf0;
     cursor: pointer;
-    border-radius: 6px;
-    padding: 6px 10px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
     outline: none;
   }
-  .cgl-copy-btn:focus-visible {
+  .cgl-copy-bubble:focus-visible {
     box-shadow: 0 0 0 2px #4c8dff;
     border-color: #4c8dff;
+  }
+  .cgl-copy-bubble svg {
+    width: 21px;
+    height: 21px;
+    display: block;
+  }
+  .cgl-drag-handle {
+    position: absolute;
+    top: -6px;
+    right: -6px;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background-color: #2a3142;
+    background-image: radial-gradient(circle, #8fa0b8 1px, transparent 1.3px);
+    background-size: 5px 5px;
+    background-position: center;
+    border: 1px solid #4c5a76;
+    cursor: grab;
+    touch-action: none;
+    padding: 0;
+  }
+  .cgl-drag-handle.cgl-dragging {
+    cursor: grabbing;
   }
   .cgl-copy-status {
     margin-top: 4px;
@@ -73,9 +127,24 @@ export type HostStatus = "idle" | "requested" | "copied" | "unavailable" | "none
 export class WritingCopyHost {
   private host: HTMLElement | null = null;
   private button: HTMLButtonElement | null = null;
+  private handle: HTMLElement | null = null;
   private statusEl: HTMLElement | null = null;
   private onClick: CopyAction | null = null;
   private lastStatus: HostStatus = "idle";
+
+  /** Session-local manual viewport offset (smart position + offset = final). */
+  private manualOffset: { x: number; y: number } = { x: 0, y: 0 };
+  /** Last smart (pre-offset) position, so drags rebase cleanly. */
+  private smartBase: { top: number; left: number } | null = null;
+
+  private dragging = false;
+  private dragPointerId: number | null = null;
+  private dragStart: { x: number; y: number } | null = null;
+  private dragOffsetStart: { x: number; y: number } | null = null;
+  private readonly boundPointerDown = (e: PointerEvent): void => this.onDragStart(e);
+  private readonly boundPointerMove = (e: PointerEvent): void => this.onDragMove(e);
+  private readonly boundPointerUp = (e: PointerEvent): void => this.onDragEnd(e);
+  private readonly boundPointerCancel = (e: PointerEvent): void => this.onDragEnd(e);
 
   /** True when the host exists in the DOM. */
   get isMounted(): boolean {
@@ -97,6 +166,11 @@ export class WritingCopyHost {
   /** Last status enum set on the host (structural, never DOM text). */
   get status(): HostStatus {
     return this.lastStatus;
+  }
+
+  /** Current session-local manual drag offset (copy of internal state). */
+  get dragOffset(): { x: number; y: number } {
+    return { ...this.manualOffset };
   }
 
   /**
@@ -124,14 +198,21 @@ export class WritingCopyHost {
     shadow.appendChild(style);
 
     const btn = document.createElement("button");
-    btn.className = "cgl-copy-btn";
+    btn.className = "cgl-copy-bubble";
     btn.type = "button";
     btn.setAttribute("aria-label", "Copy centered writing block");
-    btn.textContent = "Copy";
+    btn.innerHTML = COPY_ICON_SVG;
     shadow.appendChild(btn);
 
+    const grip = document.createElement("div");
+    grip.className = "cgl-drag-handle";
+    grip.setAttribute("aria-label", "Move copy button");
+    grip.setAttribute("role", "button");
+    grip.setAttribute("tabindex", "-1");
+    shadow.appendChild(grip);
+
     const status = document.createElement("div");
-    status.className = "cgl-copy-status";
+    status.className = "cgl-copy-status cgl-visually-hidden";
     status.setAttribute("role", "status");
     status.setAttribute("aria-live", "polite");
     status.textContent = STATUS_IDLE;
@@ -139,8 +220,10 @@ export class WritingCopyHost {
 
     this.host = host;
     this.button = btn;
+    this.handle = grip;
     this.statusEl = status;
     this.bindClick();
+    this.bindDragStart();
 
     stampBootId(host);
     document.body.appendChild(host);
@@ -149,6 +232,12 @@ export class WritingCopyHost {
   private bindClick(): void {
     if (this.button && this.onClick) {
       this.button.onclick = (): void => this.onClick?.();
+    }
+  }
+
+  private bindDragStart(): void {
+    if (this.handle) {
+      this.handle.addEventListener("pointerdown", this.boundPointerDown);
     }
   }
 
@@ -162,10 +251,11 @@ export class WritingCopyHost {
    * Position the host against the active block's right edge.
    *
    * `smart` mode: prefer just OUTSIDE the block's right edge; fall back to
-   * inside-right when there is insufficient horizontal room; clamp the
-   * complete button bounds within the visible viewport margins (preferring
-   * `window.visualViewport` when available) and keep Y aligned usefully with
-   * the active block, never offscreen.
+   * inside-right when there is insufficient horizontal room; then ADD the
+   * session-local manual drag offset and clamp the complete circle within the
+   * visible viewport margins (preferring `window.visualViewport` when
+   * available). Y stays usefully aligned with the active block, never
+   * offscreen. The target element itself is never modified.
    */
   positionAgainst(
     block: HTMLElement,
@@ -178,15 +268,11 @@ export class WritingCopyHost {
       return;
     }
     const hostRect = this.host.getBoundingClientRect();
-    const hostW = hostRect.width || 80;
-    const hostH = hostRect.height || 32;
+    const hostW = hostRect.width || COPY_BUBBLE_PX;
+    const hostH = hostRect.height || COPY_BUBBLE_PX;
     const margin = 6;
 
-    const vv = (globalThis as unknown as {
-      visualViewport?: { width: number; height: number };
-    }).visualViewport;
-    const vw = Math.round(vv?.width ?? window.innerWidth ?? 0);
-    const vh = Math.round(vv?.height ?? window.innerHeight ?? 0);
+    const { vw, vh } = viewportSize();
 
     let top: number;
     switch (mode) {
@@ -218,9 +304,120 @@ export class WritingCopyHost {
     left = Math.max(margin, Math.min(left, vw - hostW - margin));
     top = Math.max(margin, Math.min(top, vh - hostH - margin));
 
-    this.host.style.top = `${Math.round(top)}px`;
-    this.host.style.left = `${Math.round(left)}px`;
+    // Remember the smart base, then apply the manual drag offset and clamp
+    // the FINAL circle fully inside the viewport.
+    this.smartBase = { top, left };
+    const final = this.clampFinal(top + this.manualOffset.y, left + this.manualOffset.x, hostW, hostH, margin, vw, vh);
+
+    this.host.style.top = `${Math.round(final.top)}px`;
+    this.host.style.left = `${Math.round(final.left)}px`;
     this.setVisible(true);
+  }
+
+  // --- manual drag (handle-only; never copies) ------------------------------
+
+  private onDragStart(e: PointerEvent): void {
+    if (this.dragging) return;
+    e.preventDefault();
+    e.stopPropagation();
+    this.dragging = true;
+    this.dragPointerId = e.pointerId;
+    this.dragStart = { x: e.clientX, y: e.clientY };
+    this.dragOffsetStart = { ...this.manualOffset };
+    this.handle?.classList.add("cgl-dragging");
+    const h = this.handle;
+    if (h) {
+      try {
+        if (typeof h.setPointerCapture === "function") h.setPointerCapture(e.pointerId);
+      } catch {
+        /* jsdom / non-mouse pointers: capture is best-effort */
+      }
+      h.addEventListener("pointermove", this.boundPointerMove);
+      h.addEventListener("pointerup", this.boundPointerUp);
+      h.addEventListener("pointercancel", this.boundPointerCancel);
+    }
+  }
+
+  private onDragMove(e: PointerEvent): void {
+    if (!this.dragging || !this.host) return;
+    if (this.dragPointerId != null && e.pointerId !== this.dragPointerId) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const start = this.dragStart ?? { x: 0, y: 0 };
+    const base = this.dragOffsetStart ?? { x: 0, y: 0 };
+    this.manualOffset = {
+      x: base.x + (e.clientX - start.x),
+      y: base.y + (e.clientY - start.y),
+    };
+    this.applySmartPlusOffset();
+  }
+
+  private onDragEnd(e: PointerEvent): void {
+    if (!this.dragging) return;
+    if (this.dragPointerId != null && e.pointerId !== this.dragPointerId) return;
+    e.stopPropagation();
+    this.releaseDrag();
+  }
+
+  /** Re-apply smart base + current offset, clamped fully onscreen. */
+  private applySmartPlusOffset(): void {
+    if (!this.host || !this.smartBase) return;
+    const hostRect = this.host.getBoundingClientRect();
+    const hostW = hostRect.width || COPY_BUBBLE_PX;
+    const hostH = hostRect.height || COPY_BUBBLE_PX;
+    const margin = 6;
+    const { vw, vh } = viewportSize();
+    // Clamp the final circle, then fold the clamp back into the offset so no
+    // unreachable offscreen offset can accumulate.
+    const final = this.clampFinal(
+      this.smartBase.top + this.manualOffset.y,
+      this.smartBase.left + this.manualOffset.x,
+      hostW, hostH, margin, vw, vh,
+    );
+    this.manualOffset = {
+      x: final.left - this.smartBase.left,
+      y: final.top - this.smartBase.top,
+    };
+    this.host.style.top = `${Math.round(final.top)}px`;
+    this.host.style.left = `${Math.round(final.left)}px`;
+  }
+
+  private clampFinal(
+    top: number, left: number,
+    hostW: number, hostH: number,
+    margin: number, vw: number, vh: number,
+  ): { top: number; left: number } {
+    return {
+      left: Math.max(margin, Math.min(left, vw - hostW - margin)),
+      top: Math.max(margin, Math.min(top, vh - hostH - margin)),
+    };
+  }
+
+  /** Detach drag listeners, release capture, clear drag state (offset kept). */
+  private releaseDrag(): void {
+    const h = this.handle;
+    if (h) {
+      h.removeEventListener("pointermove", this.boundPointerMove);
+      h.removeEventListener("pointerup", this.boundPointerUp);
+      h.removeEventListener("pointercancel", this.boundPointerCancel);
+      try {
+        if (
+          this.dragPointerId != null &&
+          typeof h.releasePointerCapture === "function" &&
+          typeof h.hasPointerCapture === "function" &&
+          h.hasPointerCapture(this.dragPointerId)
+        ) {
+          h.releasePointerCapture(this.dragPointerId);
+        }
+      } catch {
+        /* best-effort */
+      }
+      h.classList.remove("cgl-dragging");
+    }
+    this.dragging = false;
+    this.dragPointerId = null;
+    this.dragStart = null;
+    this.dragOffsetStart = null;
   }
 
   /**
@@ -251,17 +448,33 @@ export class WritingCopyHost {
     }
   }
 
-  /** Remove the host, its listeners, and references. Idempotent. */
+  /** Remove the host, drag state, listeners, and references. Idempotent. */
   unmount(): void {
+    this.releaseDrag();
     if (this.button) this.button.onclick = null;
+    if (this.handle) this.handle.removeEventListener("pointerdown", this.boundPointerDown);
     if (this.host) {
       this.host.remove();
       this.host = null;
     }
     this.button = null;
+    this.handle = null;
     this.statusEl = null;
     this.onClick = null;
+    this.manualOffset = { x: 0, y: 0 };
+    this.smartBase = null;
   }
+}
+
+/** Visible viewport size, preferring visualViewport when available. */
+function viewportSize(): { vw: number; vh: number } {
+  const vv = (globalThis as unknown as {
+    visualViewport?: { width: number; height: number };
+  }).visualViewport;
+  return {
+    vw: Math.round(vv?.width ?? window.innerWidth ?? 0),
+    vh: Math.round(vv?.height ?? window.innerHeight ?? 0),
+  };
 }
 
 export { HOST_ID, HOST_ATTR };
