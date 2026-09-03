@@ -163,8 +163,11 @@ export function evaluateWritingBlockCandidate(
     reasons.push("BUTTON_SURFACE");
   }
 
-  // Reject candidates that contain code blocks.
-  if (candidate.querySelector('pre, code')) {
+  // Reject candidates that contain code blocks — EXCEPT the single proven
+  // case: the exact structural anchored editor may contain inline <code>,
+  // <pre>, or <pre><code> as CONTENT while remaining one canonical block.
+  // Forbidden code elements THEMSELVES stay rejected via FORBIDDEN_TAG.
+  if (!detection.provenAnchoredEditor && candidate.querySelector('pre, code')) {
     reasons.push("CONTAINS_CODE");
   }
 

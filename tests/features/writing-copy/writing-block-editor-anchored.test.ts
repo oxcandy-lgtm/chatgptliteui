@@ -292,3 +292,110 @@ describe("surgical contenteditable exception scope", () => {
     expect(isSafeWritingBlock(block, adapter)).toBe(false);
   });
 });
+
+describe("anchored editor containing code stays one canonical safe block", () => {
+  let dom: JSDOM;
+  let originalGlobals: Record<string, unknown>;
+  beforeEach(() => {
+    originalGlobals = {
+      window: globalThis.window,
+      document: globalThis.document,
+      HTMLElement: globalThis.HTMLElement,
+      Element: globalThis.Element,
+      Node: globalThis.Node,
+    };
+  });
+  afterEach(() => {
+    const g = globalThis as unknown as Record<string, unknown>;
+    (Object.keys(originalGlobals) as (keyof typeof originalGlobals)[]).forEach((k) => {
+      if (originalGlobals[k] === undefined) {
+        try { delete (g as Record<string, unknown>)[k]; } catch { /* ignore */ }
+      } else {
+        try { g[k] = originalGlobals[k]; } catch { /* ignore */ }
+      }
+    });
+    dom?.window.close();
+  });
+
+  function codeTurn(): string {
+    return (
+      `<div data-message-author-role="assistant" data-testid="assistant-message" id="t-code">` +
+      `<div class="writing-region">` +
+      `<div class="writing-header"><button data-testid="writing-block-header-magic-edit-button">HEADER_CODE_XYZ</button>` +
+      `<button aria-label="Copy">TOOLBAR_CODE_QRS</button></div>` +
+      `<div contenteditable="true" class="editor" id="code-editor">` +
+      `<p>Explanation</p>` +
+      `<p>Use inline <code>const y = 2;</code> here.</p>` +
+      `<pre><code>const x = 1;</code></pre>` +
+      `<p>More explanation</p>` +
+      `</div>` +
+      `</div>` +
+      `</div>`
+    );
+  }
+
+  it("proven anchored editor with inline code + pre>code is accepted; descendants are not separate blocks", () => {
+    dom = installDom(PAGE([codeTurn()]));
+    const adapter = createAdapter();
+    const container = adapter.detectConversationContainer().element!;
+    const result = adapter.detectWritingBlocks(container);
+    expect(result.found).toBe(true);
+    expect(result.strategy).toBe(WRITING_FALLBACK_STRATEGY_ID);
+    expect(result.confidence).toBe("high");
+
+    const diag = inferWritingBlocksFromEditorAnchors(container).diagnostic;
+    expect(diag.attempted).toBe(true);
+    expect(diag.found).toBe(true);
+    expect(diag.pairCount).toBe(1);
+    expect(diag.ambiguousCount).toBe(0);
+
+    const editor = dom.window.document.getElementById("code-editor")!;
+    const ev = evaluateWritingBlockCandidate(editor, adapter);
+    expect(ev.accepted).toBe(true);
+    expect(ev.reasons).toEqual([]);
+    expect(ev.confidence).toBe("high");
+    expect(isProvenWritingBlockEditor(editor, adapter)).toBe(true);
+
+    const safe = findSafeWritingBlocks(adapter);
+    expect(safe).toHaveLength(1);
+    expect(safe[0]).toBe(editor);
+
+    // Canonical text comes from the editor only; header/toolbar excluded.
+    const text = safe[0]!.textContent ?? "";
+    expect(text.includes("HEADER_CODE_XYZ")).toBe(false);
+    expect(text.includes("TOOLBAR_CODE_QRS")).toBe(false);
+    expect(text.includes("Explanation")).toBe(true);
+    expect(text.includes("const x = 1;")).toBe(true);
+
+    // Descendants must NOT become separate safe blocks.
+    const innerP = editor.querySelector("p")!;
+    const innerPre = editor.querySelector("pre")!;
+    const innerCode = editor.querySelector("code")!;
+    expect(isSafeWritingBlock(innerP, adapter)).toBe(false);
+    expect(isSafeWritingBlock(innerPre, adapter)).toBe(false);
+    expect(isSafeWritingBlock(innerCode, adapter)).toBe(false);
+    const preEv = evaluateWritingBlockCandidate(innerPre, adapter);
+    expect(preEv.accepted).toBe(false);
+    expect(preEv.reasons).toContain("FORBIDDEN_TAG");
+    const codeEv = evaluateWritingBlockCandidate(innerCode, adapter);
+    expect(codeEv.accepted).toBe(false);
+    expect(codeEv.reasons).toContain("FORBIDDEN_TAG");
+    const pEv = evaluateWritingBlockCandidate(innerP, adapter);
+    expect(pEv.accepted).toBe(false);
+    expect(pEv.reasons).toContain("CONTENTEDITABLE_ANCESTOR");
+  });
+
+  it("generic NON-anchored code-containing candidate is still rejected CONTAINS_CODE", () => {
+    dom = installDom(PAGE([
+      `<div data-message-author-role="assistant" data-testid="assistant-message" id="t-gen">` +
+      `<div data-testid="text-block" id="gen-code"><p>Explanation</p><pre><code>example</code></pre></div>` +
+      `</div>`,
+    ]));
+    const adapter = createAdapter();
+    const el = dom.window.document.getElementById("gen-code")!;
+    const ev = evaluateWritingBlockCandidate(el, adapter);
+    expect(ev.accepted).toBe(false);
+    expect(ev.reasons).toContain("CONTAINS_CODE");
+    expect(isProvenWritingBlockEditor(el, adapter)).toBe(false);
+  });
+});
