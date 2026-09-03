@@ -301,6 +301,19 @@ function isExtensionHost(node: Node): boolean {
 }
 
 /**
+ * Route-settle guard (Phase 4 revisit fix): set synchronously on every route
+ * change. While set, the structural observer stays rooted at document.body —
+ * the async re-apply may otherwise pin it to the OUTGOING conversation
+ * container (still connected at that instant), which React then removes. An
+ * observer on a detached root never sees the incoming conversation render, so
+ * no refresh — and therefore no copied-state hydration — would ever be
+ * re-driven. Cleared the moment narrowing adopts a non-body root for the new
+ * route. Staying on body is always the safe fallback (identical to the
+ * long-standing no-container behavior).
+ */
+let preferBroadRoot = false;
+
+/**
  * Pick the narrowest stable observer root.
  *  - When only appearance is active (no sidebar), observe the narrow
  *    conversation container (existing behavior).
@@ -310,6 +323,16 @@ function isExtensionHost(node: Node): boolean {
  *    exists. Never remain on document.body once a narrower root is available.
  */
 function pickObserverTarget(settings: Settings): Node {
+  if (preferBroadRoot) return document.body;
+  return pickNarrowTarget(settings);
+}
+
+/**
+ * Narrow-root computation ignoring the route-settle guard (used by the
+ * narrowing step so a newly rendered container can still be adopted while the
+ * guard is set).
+ */
+function pickNarrowTarget(settings: Settings): Node {
   const conv = adapter.detectConversationContainer().element;
   if (!hasSidebarEffects(settings) && !sidebarController.hasTransientSidebarEffect()) {
     return conv ?? document.body;
@@ -390,8 +413,12 @@ function connectObserver(settings: Settings): void {
       // Re-detect with current DOM before narrowing (a safe sidebar may have
       // just appeared or moved), so the observer adopts the narrower safe root.
       sidebarController.refresh(s);
-      const narrower = pickObserverTarget(s);
-      if (narrower && narrower !== observedTarget) connectObserver(s);
+      const narrower = pickNarrowTarget(s);
+      if (narrower && narrower !== observedTarget) {
+        // The new route rendered a usable root: the settle window is over.
+        if (narrower !== document.body) preferBroadRoot = false;
+        connectObserver(s);
+      }
     }
     // Coalesce refresh into one debounced operation.
     scheduleMarkerRefresh();
@@ -426,6 +453,7 @@ function teardown(): void {
   }
   runtimeEnabled = false;
   disconnectObserver();
+  preferBroadRoot = false;
   sidebarController.teardown();
   writingCopyController.teardown();
   xrayController.stop();
@@ -440,6 +468,14 @@ function reapplyAfterRouteChange(): void {
   writingCopyController.restore();
   xrayController.stop(); // X-Ray is page-local; a route change closes it.
   adapter.refresh();
+  // Settle guard for the async re-apply below: while set, observer rooting
+  // prefers document.body so the re-apply can never pin the observer to the
+  // outgoing (still-connected, soon-removed) container. The narrowing step
+  // adopts the new route's container on the next structural batch and clears
+  // the guard. Deliberately NO observer surgery here: disconnecting would bump
+  // the observer epoch and discard the very batch that detected the route —
+  // the batch that can adopt an already-rendered new root immediately.
+  preferBroadRoot = true;
   applyCurrent();
 }
 

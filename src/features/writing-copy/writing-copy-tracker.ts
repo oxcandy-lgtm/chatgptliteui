@@ -242,7 +242,11 @@ export class WritingCopyTracker {
     });
     this.candidates.clear();
     this.active = null;
-    this.onRecalculate = null;
+    // NOTE: onRecalculate is constructor-owned (controller's visual reconcile)
+    // and must SURVIVE teardown/restore: clearing it here would permanently
+    // sever scroll-driven visual reconciliation after the first route change.
+    // reconcileVisuals() itself is disabled-safe, so keeping it is correct
+    // across both transient restores and full teardowns.
   }
 }
 
