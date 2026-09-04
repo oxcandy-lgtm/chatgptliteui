@@ -119,7 +119,7 @@ function syncConversationAppearance(settings: Settings): void {
       await publishCurrentConversationFingerprint(fp);
     }
     if (settings.enabled) {
-      await applier.applyConversationBackgroundOverride(fp);
+      await applier.reconcileConversationBackgroundOverride(fp, settings);
     }
   })();
 }
@@ -643,9 +643,10 @@ async function bootstrap(): Promise<void> {
           )
         ) {
           void (async () => {
-            if (quiesced || !lastSettings?.enabled) return;
+            const s = lastSettings;
+            if (quiesced || !s?.enabled) return;
             const fp = await conversationFingerprintFromLocation();
-            await applier.applyConversationBackgroundOverride(fp);
+            await applier.reconcileConversationBackgroundOverride(fp, s);
           })();
         }
         return;

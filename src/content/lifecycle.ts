@@ -34,14 +34,18 @@ export class ThemeApplier {
   }
 
   /**
-   * Apply the stored per-conversation background override for the given
-   * conversation fingerprint (no-op when none exists). Call only while the
-   * extension is enabled; `apply()`/`restore()` already cleared stale state.
+   * Reconcile the stored per-conversation background override (clear stale
+   * override, restore global/official fallback, apply current override when
+   * present). Call only while the extension is enabled.
    */
-  applyConversationBackgroundOverride(
+  reconcileConversationBackgroundOverride(
     conversationFp: string | null,
+    settings: Settings,
   ): Promise<void> {
-    return this.controller.applyConversationBackgroundOverride(conversationFp);
+    return this.controller.reconcileConversationBackgroundOverride(
+      conversationFp,
+      settings,
+    );
   }
 
   /** Fully restore the original page appearance. */

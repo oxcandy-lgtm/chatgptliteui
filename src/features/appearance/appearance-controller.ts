@@ -172,16 +172,36 @@ export class AppearanceController {
   }
 
   /**
-   * Apply the per-conversation background override for `conversationFp`
-   * (when one is stored). Async storage read; no-op when absent, invalid, or
-   * when `conversationFp` is null. Overrides ONLY the page/conversation
-   * background variables — never user/assistant/code/writing/pulse/marker
-   * values and never global theme settings. Call only while enabled;
-   * `restore()` (start of `apply()`) already removed any previous override.
+   * Reconcile the per-conversation background override for `conversationFp`.
+   * Unlike the add-only first version, this ALWAYS clears the previous
+   * override first, then restores the effective fallback (persisted GLOBAL
+   * theme values when the global theme is enabled, otherwise the official
+   * background via variable removal), and finally applies the current
+   * conversation override when one exists. Reset/uncheck therefore restores
+   * the fallback immediately with no reload.
    */
-  async applyConversationBackgroundOverride(
+  async reconcileConversationBackgroundOverride(
     conversationFp: string | null,
+    settings: Settings,
   ): Promise<void> {
+    this.root.classList.remove("cgl-chat-bg-override");
+    if (
+      settings.enabled &&
+      settings.appearance &&
+      settings.appearance.useTheme
+    ) {
+      this.root.style.setProperty(
+        "--cgl-page-bg",
+        settings.theme.pageBackground,
+      );
+      this.root.style.setProperty(
+        "--cgl-conversation-bg",
+        settings.theme.conversationBackground,
+      );
+    } else {
+      this.root.style.removeProperty("--cgl-page-bg");
+      this.root.style.removeProperty("--cgl-conversation-bg");
+    }
     if (!conversationFp) return;
     const background = await getConversationBackground(conversationFp);
     if (!background) return;

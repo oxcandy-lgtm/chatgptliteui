@@ -174,9 +174,12 @@ async function bindChatBackground(
     picker.disabled = !enabled.checked;
     if (!enabled.checked) {
       // Unchecking removes the override (falls back to global/official).
+      // Success UI only after a real successful delete.
       void clearConversationBackground(fingerprint)
-        .then(() => {
-          identity.textContent = "No custom background for this chat.";
+        .then((ok) => {
+          identity.textContent = ok
+            ? "No custom background for this chat."
+            : "Reset failed.";
         })
         .catch(() => {
           identity.textContent = "Reset failed.";
@@ -189,7 +192,11 @@ async function bindChatBackground(
   picker.addEventListener("input", save);
   reset.addEventListener("click", () => {
     void clearConversationBackground(fingerprint)
-      .then(() => {
+      .then((ok) => {
+        if (!ok) {
+          identity.textContent = "Reset failed.";
+          return;
+        }
         enabled.checked = false;
         picker.disabled = true;
         picker.value = DEFAULT_CHAT_BACKGROUND;
