@@ -14,6 +14,8 @@ import { findSafeSidebarTarget, SIDEBAR_HOST_ID } from "../features/sidebar/side
 import { WritingCopyController, WRITING_COPY_HOST_ATTR } from "../features/writing-copy/writing-copy-controller.js";
 import { hasWritingCopyEffects } from "../features/writing-copy/writing-copy-state.js";
 import { conversationFingerprintFromLocation } from "../features/writing-copy/block-identity.js";
+import { conversationTokenFromLocation } from "../features/writing-copy/block-identity.js";
+import { syncActiveChatRow } from "../features/appearance/active-chat-row.js";
 import {
   CONVERSATION_APPEARANCE_PREFIX,
   CURRENT_CONVERSATION_KEY,
@@ -158,6 +160,13 @@ const scheduleMarkerRefresh = debounce((): void => {
       applier.refreshMarkers(settings);
       sidebarController.refresh(settings);
       writingCopyController.refresh(settings);
+      // Rebind the active sidebar row (rerenders replace rows); tint still
+      // gated on the per-chat override class.
+      try {
+        syncActiveChatRow(conversationTokenFromLocation());
+      } catch {
+        /* DOM lookup must never break the coalesced refresh */
+      }
     })
     .catch((err) => handleSettingsFailure(err, "scheduleMarkerRefresh"));
 }, 120);
@@ -217,6 +226,14 @@ function syncRuntime(settings: Settings): void {
   // Per-chat background: publish identity for the popup + apply any stored
   // override for this conversation (falls back cleanly when none exists).
   syncConversationAppearance(settings);
+
+  // Active sidebar row follows the in-memory route token (rebound on every
+  // apply; the tint itself only paints under the per-chat override class).
+  try {
+    syncActiveChatRow(conversationTokenFromLocation());
+  } catch {
+    /* DOM lookup must never break the sync apply */
+  }
 
   lastSettings = settings;
 }

@@ -109,6 +109,15 @@
   background-color: var(--cgl-conversation-bg);
 }
 
+/* ---- active sidebar chat row (Phase 4) ---------------------------------
+ * The selected conversation row shares the current per-chat background
+ * exactly (same variable, no second preference, no opacity transform).
+ * Text/icon colors stay ChatGPT-controlled; rounding untouched. Without a
+ * per-chat override the class is absent and the official highlight shows. */
+:root.cgl-chat-bg-override [data-cgl-active-chat-row="true"] {
+  background-color: var(--cgl-conversation-bg);
+}
+
 /* ---- sidebar visibility (Phase 3): guarded, marker-only, non-destructive ----
  * The only permitted mutation on the ChatGPT sidebar is the extension-owned
  * marker `data-cgl-sidebar-target="true"`. Hiding is performed by adding the

@@ -10,6 +10,7 @@ import {
   isSafeCosmeticDetection,
 } from "./presets.js";
 import { getConversationBackground } from "./conversation-background.js";
+import { clearActiveChatRowMarkers } from "./active-chat-row.js";
 import type { ChatGptAdapter } from "../../adapters/chatgpt-adapter.js";
 
 /**
@@ -220,6 +221,7 @@ export class AppearanceController {
     // Release references to avoid retaining detached nodes.
     this.marked = [];
     clearAllMarkers(document);
+    clearActiveChatRowMarkers(document);
   }
 }
 
