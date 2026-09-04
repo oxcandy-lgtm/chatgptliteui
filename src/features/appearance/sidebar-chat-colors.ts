@@ -65,6 +65,9 @@ export interface ProjectAppearanceDiagnostic {
   projectFolderPaintedCount: number;
   projectInheritedChatRowCount: number;
   projectExplicitChatOverrideCount: number;
+  projectFolderCandidateCount: number;
+  projectFolderDirectMatchCount: number;
+  projectFolderFallbackMatchCount: number;
 }
 
 /** Hydration scheduling receipt for X-Ray (triggers/timing only). */
@@ -89,6 +92,9 @@ const ZERO_PROJECT_DIAGNOSTIC: ProjectAppearanceDiagnostic = {
   projectFolderPaintedCount: 0,
   projectInheritedChatRowCount: 0,
   projectExplicitChatOverrideCount: 0,
+  projectFolderCandidateCount: 0,
+  projectFolderDirectMatchCount: 0,
+  projectFolderFallbackMatchCount: 0,
 };
 
 let lastDiagnostic: SidebarChatColorDiagnostic = { ...ZERO_DIAGNOSTIC };
@@ -261,10 +267,82 @@ function collectVisibleProjectFolders(): VisibleProjectFolder[] {
 }
 
 /**
- * Project header fallback: the nearest bounded clickable/header surface
- * PRECEDING the first child row inside the same project grouping. Used only
- * when no direct `/g/<id>` folder anchor exists. Fails closed (null) rather
- * than painting an oversized container or another project's rows.
+ * Whether an element may serve as a project header/folder surface: bounded,
+ * visible, left-zoned, and holding no conversation rows of its own (headers
+ * never contain chats) and no foreign project anchors.
+ */
+function isHeaderSurfaceCandidate(
+  el: HTMLElement,
+  isForeignToken: (token: string) => boolean,
+  isForeignProject: (projectId: string) => boolean,
+): boolean {
+  if (!el.isConnected || !hasVisibleRect(el)) return false;
+  if (el === document.body || el === document.documentElement) return false;
+  if (
+    el.matches('[data-testid="sidebar"], nav[aria-label*="chat history" i]')
+  ) {
+    return false;
+  }
+  const rect = el.getBoundingClientRect();
+  const vw = window.innerWidth || 0;
+  if (rect.height < 20 || rect.height > 160) return false;
+  if (rect.width > 440) return false;
+  if (rect.left >= Math.min(420, vw * 0.4)) return false;
+  for (const a of Array.from(el.querySelectorAll<HTMLAnchorElement>("a[href]"))) {
+    let path: string;
+    try {
+      path = new URL(a.getAttribute("href") ?? "", window.location.origin)
+        .pathname;
+    } catch {
+      continue;
+    }
+    const tok = extractConversationTokenFromPath(path);
+    if (tok && isForeignToken(tok)) return false;
+    // A surface containing ANY conversation row is a chat row or a mixed
+    // grouping — never the folder header. (Own-group chats are checked by
+    // the caller passing them as non-foreign; a header never contains them
+    // because headers precede the child list.)
+    if (tok) return false;
+    if (!path.includes("/c/")) {
+      const pid = extractProjectIdFromPath(path);
+      if (pid && isForeignProject(pid)) return false;
+    }
+  }
+  return true;
+}
+
+/** Whether a container swallows another project's chats (must not paint). */
+function containerHasForeign(
+  container: Element,
+  isForeignToken: (token: string) => boolean,
+  isForeignProject: (projectId: string) => boolean,
+): boolean {
+  for (const a of Array.from(container.querySelectorAll<HTMLAnchorElement>("a[href]"))) {
+    let path: string;
+    try {
+      path = new URL(a.getAttribute("href") ?? "", window.location.origin)
+        .pathname;
+    } catch {
+      continue;
+    }
+    const tok = extractConversationTokenFromPath(path);
+    if (tok && isForeignToken(tok)) return true;
+    if (!path.includes("/c/")) {
+      const pid = extractProjectIdFromPath(path);
+      if (pid && isForeignProject(pid)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Project header fallback: the nearest bounded header surface associated
+ * with the project's first child row. Covers BOTH sidebar shapes:
+ * header-inside-grouping (a bounded clickable preceding the first child
+ * within their smallest common container) AND header-as-preceding-sibling
+ * (folder row beside/above the child-list container, never its descendant).
+ * Used only when no direct `/g/<id>` folder anchor exists. Fails closed
+ * (null) rather than painting an oversized container or another project.
  */
 export function deriveProjectGroupHeader(
   group: HTMLAnchorElement[],
@@ -286,22 +364,10 @@ export function deriveProjectGroupHeader(
   }
   if (!container || !container.isConnected) return null;
   // Reject groupings that also swallow another project's chats.
-  for (const a of Array.from(container.querySelectorAll<HTMLAnchorElement>("a[href]"))) {
-    let path: string;
-    try {
-      path = new URL(a.getAttribute("href") ?? "", window.location.origin)
-        .pathname;
-    } catch {
-      continue;
-    }
-    const tok = extractConversationTokenFromPath(path);
-    if (tok && isForeignToken(tok)) return null;
-    if (!path.includes("/c/")) {
-      const pid = extractProjectIdFromPath(path);
-      if (pid && isForeignProject(pid)) return null;
-    }
+  if (containerHasForeign(container, isForeignToken, isForeignProject)) {
+    return null;
   }
-  // Nearest row-sized clickable preceding the first child row.
+  // Shape 1: bounded clickable preceding the first child WITHIN the group.
   const vw = window.innerWidth || 0;
   let header: HTMLElement | null = null;
   for (const el of Array.from(
@@ -324,9 +390,33 @@ export function deriveProjectGroupHeader(
     if (rect.height < 20 || rect.height > 160) continue;
     if (rect.width > 440) continue;
     if (rect.left >= Math.min(420, vw * 0.4)) continue;
+    if (!isHeaderSurfaceCandidate(el, isForeignToken, isForeignProject)) {
+      continue;
+    }
     header = el; // keep the nearest preceding candidate
   }
-  return header;
+  if (header) return header;
+  // Shape 2: the folder/header row is a PRECEDING SIBLING of the child-list
+  // container (never its descendant). Walk a small bounded neighborhood up
+  // from the container; never scan the whole sidebar.
+  let node: HTMLElement | null = container;
+  for (let depth = 0; depth < 3; depth++) {
+    if (!node || node === document.body || node === document.documentElement) {
+      break;
+    }
+    let sibling = node.previousElementSibling;
+    while (sibling) {
+      if (
+        sibling instanceof HTMLElement &&
+        isHeaderSurfaceCandidate(sibling, isForeignToken, isForeignProject)
+      ) {
+        return sibling; // nearest preceding sibling first
+      }
+      sibling = sibling.previousElementSibling;
+    }
+    node = node.parentElement;
+  }
+  return null;
 }
 
 interface DesiredPaint {
@@ -458,6 +548,9 @@ export async function hydrateSidebarChatColors(): Promise<SidebarChatColorDiagno
     if (!folderByProject.has(f.projectId)) folderByProject.set(f.projectId, f.el);
   }
   let projectColorMatches = 0;
+  let folderCandidates = 0;
+  let folderDirectMatches = 0;
+  let folderFallbackMatches = 0;
   for (const [pid, projFp] of projFpById) {
     const value = saved[projectAppearanceKey(projFp)];
     if (!isValidProjectAppearance(value)) continue;
@@ -466,11 +559,14 @@ export async function hydrateSidebarChatColors(): Promise<SidebarChatColorDiagno
     let surface: HTMLElement | null = null;
     const folderAnchor = folderByProject.get(pid);
     if (folderAnchor?.isConnected) {
+      folderCandidates++;
       surface = deriveRowSurface(folderAnchor);
+      if (surface) folderDirectMatches++;
     }
     if (!surface) {
       const group = (byProject.get(pid) ?? []).filter((a) => a.isConnected);
       if (group.length > 0) {
+        folderCandidates++;
         const foreignTokens = new Set<string>();
         const foreignProjects = new Set<string>();
         for (const a of anchors) {
@@ -482,11 +578,15 @@ export async function hydrateSidebarChatColors(): Promise<SidebarChatColorDiagno
         for (const f of folders) {
           if (f.projectId !== pid) foreignProjects.add(f.projectId);
         }
-        surface = deriveProjectGroupHeader(
+        const fallback = deriveProjectGroupHeader(
           group,
           (tok) => foreignTokens.has(tok),
           (id) => foreignProjects.has(id),
         );
+        if (fallback) {
+          surface = fallback;
+          folderFallbackMatches++;
+        }
       }
     }
     if (!surface || !surface.isConnected) continue;
@@ -558,6 +658,9 @@ export async function hydrateSidebarChatColors(): Promise<SidebarChatColorDiagno
     projectFolderPaintedCount: paintedFolders,
     projectInheritedChatRowCount: inheritedCount,
     projectExplicitChatOverrideCount: explicitCount,
+    projectFolderCandidateCount: folderCandidates,
+    projectFolderDirectMatchCount: folderDirectMatches,
+    projectFolderFallbackMatchCount: folderFallbackMatches,
   });
   return done({
     sidebarChatRouteCandidateCount: anchors.length,

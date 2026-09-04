@@ -60,6 +60,11 @@ export class AppearanceController {
   private readonly adapter: ChatGptAdapter;
   /** Elements marked in the most recent apply; released on teardown. */
   private marked: Element[] = [];
+  /**
+   * Background reconcile generation: rapid route changes invalidate older
+   * in-flight resolutions so only the latest route commits paint.
+   */
+  private bgReconcileEpoch = 0;
 
   constructor(root: HTMLElement, adapter: ChatGptAdapter) {
     this.root = root;
@@ -128,12 +133,16 @@ export class AppearanceController {
 
   /**
    * Apply appearance settings.
-   * A complete no-op (no root class, no markers, no variables) when the
-   * extension is disabled or when no appearance effect is active (e.g. Normal).
+   * Full teardown-grade restore when disabled; otherwise a volatile-only
+   * reset that PRESERVES persistent sidebar chat/project color markers so
+   * route/settings re-applies never flash them to official and back.
    */
   apply(settings: Settings): void {
-    this.restore();
-    if (!settings.enabled) return;
+    if (!settings.enabled) {
+      this.restore();
+      return;
+    }
+    this.restoreVolatile();
     if (!hasAppearanceEffects(settings)) return;
 
     this.root.classList.add("cgl-active");
@@ -176,17 +185,25 @@ export class AppearanceController {
   /**
    * Reconcile the per-conversation background override. Resolution order:
    * explicit chat color, else project color, else the global/official
-   * fallback (restored first so a reset chat inside a colored project
-   * immediately shows the project color, and a project reset immediately
-   * drops inherited paint). Overrides ONLY the page/conversation background
-   * variables — never user/assistant/code/writing/pulse/marker values and
-   * never global theme settings.
+   * fallback. ATOMIC commit: the destination is fully resolved FIRST while
+   * the previous valid background stays painted; only then is one final
+   * state committed synchronously — never an intermediate cleared state.
+   * A reconcile generation guard drops stale route results (rapid A→B
+   * navigation ignores A's late answer). Overrides ONLY the
+   * page/conversation background variables — never user/assistant/code/
+   * writing/pulse/marker values and never global theme settings.
    */
   async reconcileConversationBackgroundOverride(
     conversationFp: string | null,
     projectFp: string | null,
     settings: Settings,
   ): Promise<void> {
+    const epoch = ++this.bgReconcileEpoch;
+    const background =
+      conversationFp || projectFp
+        ? await resolveChatBackground(conversationFp, projectFp)
+        : null;
+    if (epoch !== this.bgReconcileEpoch) return;
     this.root.classList.remove("cgl-chat-bg-override");
     if (
       settings.enabled &&
@@ -205,8 +222,6 @@ export class AppearanceController {
       this.root.style.removeProperty("--cgl-page-bg");
       this.root.style.removeProperty("--cgl-conversation-bg");
     }
-    if (!conversationFp && !projectFp) return;
-    const background = await resolveChatBackground(conversationFp, projectFp);
     if (!background) return;
     this.root.classList.add("cgl-chat-bg-override");
     this.root.style.setProperty("--cgl-page-bg", background);
@@ -215,16 +230,31 @@ export class AppearanceController {
 
   /**
    * Completely restore the official ChatGPT UI. Removes every extension-owned
-   * class, inline `--cgl-*` custom property, and `data-cgl-*` marker. Idempotent.
+   * class, inline `--cgl-*` custom property, and `data-cgl-*` marker,
+   * INCLUDING persistent sidebar color state. Idempotent. Used by disable /
+   * teardown paths only — normal apply/route paths use `restoreVolatile()`
+   * so colors survive without flashing.
    */
   restore(): void {
+    this.restoreVolatile();
+    clearSidebarChatColorMarkers(document);
+    this.bgReconcileEpoch++;
+  }
+
+  /**
+   * Volatile-only reset for normal settings/route applies: root classes,
+   * root variables, appearance surface markers, and active-chat markers.
+   * Persistent sidebar chat/project color markers and their element-local
+   * variables are PRESERVED (reconciled separately). Idempotent.
+   */
+  restoreVolatile(): void {
     for (const cls of CGL_CLASSES) this.root.classList.remove(cls);
     for (const v of CGL_VARS) this.root.style.removeProperty(v);
     // Release references to avoid retaining detached nodes.
     this.marked = [];
     clearAllMarkers(document);
     clearActiveChatRowMarkers(document);
-    clearSidebarChatColorMarkers(document);
+    this.bgReconcileEpoch++;
   }
 }
 

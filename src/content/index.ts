@@ -650,7 +650,12 @@ function reapplyAfterRouteChange(): void {
   ) {
     connectObserver(lastSettings);
   }
-  applier.restore();
+  // NOTE: no applier.restore() here. A full appearance restore would clear
+  // persistent sidebar color state and main-background variables, flashing
+  // official styling until the async re-apply resolves. The last valid
+  // visual state is kept until syncRuntime's apply() reconciles volatile
+  // presentation and the async background/sidebar hydration commits the
+  // destination state directly (same-color routes show zero flash).
   sidebarController.restore();
   writingCopyController.restore();
   xrayController.stop(); // X-Ray is page-local; a route change closes it.
