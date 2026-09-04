@@ -373,6 +373,21 @@
   }
 }
 
+/* ---- Phase 5 folding: presentation-only clipping -----------------------
+ * Extension-owned fold markers clip long code blocks / long responses with
+ * max-height + overflow only. Original DOM, text, and controls are never
+ * touched; teardown removes every marker. Fold controls live in an
+ * extension-owned Shadow host. */
+[data-cgl-code-folded="true"] {
+  max-height: 260px !important;
+  overflow: hidden !important;
+}
+
+[data-cgl-response-folded="true"] {
+  max-height: 420px !important;
+  overflow: hidden !important;
+}
+
 /* ---- CGL X-RAY diagnostic paint (maintenance port) ------------------------
  * TEMPORARY extension-owned diagnostics. Every rule is guarded by the
  * `cgl-xray-on` root class, which exists ONLY while X-Ray is active; closing

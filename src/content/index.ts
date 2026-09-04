@@ -12,6 +12,7 @@ import { hasSidebarEffects } from "../features/sidebar/sidebar-state.js";
 import { SidebarController } from "../features/sidebar/sidebar-controller.js";
 import { findSafeSidebarTarget, SIDEBAR_HOST_ID } from "../features/sidebar/sidebar-detection.js";
 import { WritingCopyController, WRITING_COPY_HOST_ATTR } from "../features/writing-copy/writing-copy-controller.js";
+import { FoldingController } from "../features/folding/folding-controller.js";
 import { hasWritingCopyEffects } from "../features/writing-copy/writing-copy-state.js";
 import { conversationFingerprintFromLocation } from "../features/writing-copy/block-identity.js";
 import { conversationTokenFromLocation } from "../features/writing-copy/block-identity.js";
@@ -80,6 +81,7 @@ const applier = new ThemeApplier();
 const adapter = createAdapter();
 const sidebarController = new SidebarController(document.documentElement, adapter);
 const writingCopyController = new WritingCopyController(document.documentElement, adapter);
+const foldingController = new FoldingController(document.documentElement, adapter);
 const xrayController = new XrayController({
   root: document.documentElement,
   adapter,
@@ -266,6 +268,7 @@ const scheduleMarkerRefresh = debounce((): void => {
       applier.refreshMarkers(settings);
       sidebarController.refresh(settings);
       writingCopyController.refresh(settings);
+      foldingController.refresh(settings);
       // Rebind the active sidebar row (rerenders replace rows); tint still
       // gated on the per-chat override class. NOTE: sidebar COLOR hydration
       // is deliberately NOT here — conversation/message DOM churn must never
@@ -291,6 +294,7 @@ function syncRuntime(settings: Settings): void {
   });
   sidebarController.apply(settings);
   writingCopyController.apply(settings);
+  foldingController.apply(settings);
 
   // Fix 2: reflect enabled state and attach/detach the sidebar shortcut listener.
   runtimeEnabled = settings.enabled;
@@ -447,6 +451,7 @@ export function quiesceStaleRuntime(): void {
   disconnectSidebarColorObserver();
   sidebarController.teardown();
   writingCopyController.teardown();
+  foldingController.teardown();
   applier.restore();
   routeListener.stop();
   logger.warn(
@@ -478,6 +483,7 @@ function isExtensionHost(node: Node): boolean {
       node.getAttribute("data-cgl-sidebar-host") === "true" ||
       node.getAttribute(WRITING_COPY_HOST_ATTR) === "true" ||
       node.getAttribute("data-cgl-xray-host") === "true" ||
+      node.getAttribute("data-cgl-folding-host") === "true" ||
       node.tagName.toLowerCase() === "style")
   );
 }
@@ -642,6 +648,7 @@ function teardown(): void {
   preferBroadRoot = false;
   sidebarController.teardown();
   writingCopyController.teardown();
+  foldingController.teardown();
   xrayController.stop();
   applier.restore();
 }
@@ -680,6 +687,7 @@ function reapplyAfterRouteChange(): void {
   // destination state directly (same-color routes show zero flash).
   sidebarController.restore();
   writingCopyController.restore();
+  foldingController.restore();
   xrayController.stop(); // X-Ray is page-local; a route change closes it.
   adapter.refresh();
   applyCurrent();
@@ -861,6 +869,7 @@ export {
   adapter,
   sidebarController,
   writingCopyController,
+  foldingController,
   xrayController,
   routeListener,
   connectObserver,
