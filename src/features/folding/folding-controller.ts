@@ -1,6 +1,6 @@
 import type { Settings } from "../../shared/types.js";
 import type { ChatGptAdapter } from "../../adapters/chatgpt-adapter.js";
-import { FoldingHost } from "./folding-host.js";
+import { FoldingHost, type ActiveFoldTarget } from "./folding-host.js";
 import {
   MARKER_CODE_FOLDED,
   MARKER_RESPONSE_FOLDED,
@@ -36,6 +36,14 @@ import {
  * runtime drives `apply`/`refresh`/`teardown` through the existing
  * mutation lifecycle.
  */
+
+/** Serializable folding receipt for X-Ray (counts only, never content). */
+export interface FoldingReceipt {
+  foldingEligibleCodeCount: number;
+  foldingEligibleResponseCount: number;
+  foldingMountedButtonCount: number;
+  foldingRetainedTargetCount: number;
+}
 
 /** Minimum rendered code lines for a block to become foldable. */
 export const CODE_FOLD_MIN_LINES = 25;
@@ -113,18 +121,20 @@ export class FoldingController {
     this.reconcile();
   }
 
-  /** Core pass: detect long targets, auto-fold new ones, sync controls. */
+  /** Core pass: detect long targets, auto-fold new ones, sync the HUD. */
   private reconcile(): void {
     const container = this.adapter.detectConversationContainer().element;
     if (!container) {
-      this.host.sync(new Map(), new Map(), null);
+      this.host.sync(null, null);
       return;
     }
     const generating = this.adapter.detectGeneratingIndicator().found;
     const turns = assistantTurns(container);
     const streamingTurn = generating ? turns[turns.length - 1] ?? null : null;
 
-    const codeStates = new Map<HTMLElement, boolean>();
+    // Local eligible lists only: they die with this pass. The host retains
+    // at most the single active target; nothing else is kept.
+    const codes: HTMLElement[] = [];
     for (const pre of longCodeBlocks(container)) {
       // Never touch code inside the currently streaming turn: no auto-fold,
       // no marker, no control for this reconciliation. When generation ends,
@@ -134,9 +144,9 @@ export class FoldingController {
       if (!pre.isConnected) continue;
       const folded = pre.getAttribute(MARKER_CODE_FOLDED) === "true";
       if (!folded && !this.userExpanded.has(pre)) markCodeFolded(pre);
-      codeStates.set(pre, pre.getAttribute(MARKER_CODE_FOLDED) === "true");
+      codes.push(pre);
     }
-    const responseStates = new Map<HTMLElement, boolean>();
+    const responses: HTMLElement[] = [];
     for (const turn of turns) {
       if (!turn.isConnected) continue;
       if (!isLongResponse(turn)) {
@@ -145,8 +155,10 @@ export class FoldingController {
         }
         continue;
       }
-      // Never auto-fold the streaming turn; user-expanded turns stay open.
+      // Never auto-fold the streaming turn; user-expanded turns stay open
+      // (but remain eligible for their Collapse control).
       if (turn === streamingTurn || this.userExpanded.has(turn)) {
+        responses.push(turn);
         continue;
       }
       // Auto-fold only when the marker is absent (first finished sighting);
@@ -154,17 +166,75 @@ export class FoldingController {
       if (turn.getAttribute(MARKER_RESPONSE_FOLDED) !== "true") {
         markResponseFolded(turn);
       }
-      responseStates.set(turn, true);
+      responses.push(turn);
     }
-    // Include already-folded turns (e.g. user-collapsed) in control sync.
-    for (const turn of queryMarked(MARKER_RESPONSE_FOLDED)) {
-      if (!responseStates.has(turn)) responseStates.set(turn, true);
-    }
+    const active = this.selectActiveTarget(codes, responses);
     const anyCodeFolded =
-      codeStates.size > 0
-        ? [...codeStates.values()].some((folded) => folded)
+      codes.length > 0
+        ? codes.some(
+            (pre) => pre.getAttribute(MARKER_CODE_FOLDED) === "true",
+          )
         : null;
-    this.host.sync(codeStates, responseStates, anyCodeFolded);
+    this.host.sync(active, anyCodeFolded);
+  }
+
+  /**
+   * Choose the single HUD target: the eligible target nearest the viewport
+   * center. Offscreen targets never bind the button. Ties prefer code.
+   */
+  private selectActiveTarget(
+    codes: HTMLElement[],
+    responses: HTMLElement[],
+  ): ActiveFoldTarget | null {
+    const vh = window.innerHeight || 0;
+    let best: ActiveFoldTarget | null = null;
+    let bestDistance = Number.POSITIVE_INFINITY;
+    const consider = (el: HTMLElement, kind: "code" | "response"): void => {
+      if (!el.isConnected) return;
+      let rect: DOMRect;
+      try {
+        rect = el.getBoundingClientRect();
+      } catch {
+        return;
+      }
+      if (rect.width <= 0 || rect.height <= 0) return;
+      if (rect.bottom <= 0 || rect.top >= vh) return;
+      const distance = Math.abs(rect.top + rect.height / 2 - vh / 2);
+      const folded = el.getAttribute(
+        kind === "code" ? MARKER_CODE_FOLDED : MARKER_RESPONSE_FOLDED,
+      ) === "true";
+      if (
+        distance < bestDistance - 0.5 ||
+        (best?.kind === "response" &&
+          kind === "code" &&
+          Math.abs(distance - bestDistance) <= 0.5)
+      ) {
+        best = { kind, target: el, folded };
+        bestDistance = distance;
+      }
+    };
+    for (const pre of codes) consider(pre, "code");
+    for (const turn of responses) consider(turn, "response");
+    return best;
+  }
+
+  /** Counts-only receipt for X-Ray (no content, no identifiers). */
+  foldingReceipt(): FoldingReceipt {
+    const container = this.adapter.detectConversationContainer().element;
+    let codes = 0;
+    let responses = 0;
+    if (container) {
+      codes = longCodeBlocks(container).filter((el) => el.isConnected).length;
+      responses = assistantTurns(container).filter(
+        (el) => el.isConnected && isLongResponse(el),
+      ).length;
+    }
+    return {
+      foldingEligibleCodeCount: codes,
+      foldingEligibleResponseCount: responses,
+      foldingMountedButtonCount: this.host.buttonCount,
+      foldingRetainedTargetCount: this.host.retainedTarget ? 1 : 0,
+    };
   }
 
   // --- user actions --------------------------------------------------------
@@ -229,7 +299,7 @@ export class FoldingController {
     }
   }
 
-  /** rAF-coalesced control repositioning (no work when nothing changes). */
+  /** rAF-coalesced scroll/resize pass: re-select the active HUD target. */
   private scheduleReposition(): void {
     if (this.geometryRaf != null) return;
     const raf =
@@ -240,7 +310,9 @@ export class FoldingController {
     this.geometryRaf = raf(() => {
       this.geometryRaf = null;
       if (!this.enabled) return;
-      this.host.reposition();
+      // Full reconcile re-derives eligibility, re-selects the visible
+      // active target, and moves the SAME button — no per-target state.
+      this.reconcile();
     });
   }
 

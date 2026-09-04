@@ -44,6 +44,7 @@ import type {
   WritingCopyControllerReceipt,
   CopyTransactionReceipt,
 } from "../writing-copy/writing-copy-controller.js";
+import type { FoldingReceipt } from "../folding/folding-controller.js";
 
 /** All SelectorTargets probed by the scan, in stable report order. */
 const PROBED_TARGETS: SelectorTarget[] = [
@@ -154,6 +155,8 @@ export interface XrayScan {
   writingCopyController: WritingCopyControllerReceipt | null;
   /** Last copy click transaction (null when no controller/attempt). */
   copyTransaction: CopyTransactionReceipt | null;
+  /** Folding HUD receipt (null when no controller is wired). */
+  folding: FoldingReceipt | null;
 }
 
 /** Count live ranges held by the extension's copied-marker Highlight. */
@@ -311,6 +314,7 @@ export function runXrayScan(
   settings: { enabled: boolean; writingCopyEnabled: boolean },
   controller: WritingCopyControllerReceipt | null = null,
   copyTransaction: CopyTransactionReceipt | null = null,
+  folding: FoldingReceipt | null = null,
 ): XrayScan {
   const containerResult = adapter.detectConversationContainer();
   const containerRoot: ParentNode = containerResult.element ?? document;
@@ -484,5 +488,6 @@ export function runXrayScan(
     runtimeHealth: snapshotRuntimeHealth(document),
     writingCopyController: controller,
     copyTransaction,
+    folding,
   };
 }

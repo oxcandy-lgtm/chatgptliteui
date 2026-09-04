@@ -120,6 +120,8 @@ export interface XrayReportV1 {
   writingCopyController: XrayScan["writingCopyController"];
   /** Last copy click transaction (null when no controller/attempt). */
   copyTransaction: CopyTransactionReceipt | null;
+  /** Folding HUD receipt (null when no controller is wired). */
+  folding: XrayScan["folding"];
   diagnosis: {
     summary: string;
     firstBlocker: string;
@@ -362,6 +364,7 @@ export function buildXrayReport(
     runtimeHealth: scan.runtimeHealth,
     writingCopyController: scan.writingCopyController,
     copyTransaction: scan.copyTransaction,
+    folding: scan.folding,
     diagnosis: {
       summary: diagnose(scan).summary,
       firstBlocker: diagnose(scan).firstBlocker,

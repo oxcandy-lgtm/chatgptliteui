@@ -35,6 +35,7 @@ import type {
   WritingCopyControllerReceipt,
   CopyTransactionReceipt,
 } from "../writing-copy/writing-copy-controller.js";
+import type { FoldingReceipt } from "../folding/folding-controller.js";
 
 /** Extension-owned diagnostic paint attributes (X-Ray-only, removed on close). */
 const PAINT_ASSISTANT_TURN = "data-cgl-xray-assistant-turn";
@@ -84,6 +85,8 @@ export interface XrayDeps {
   getWritingCopyControllerReceipt?: () => WritingCopyControllerReceipt | null;
   /** Live last-copy-transaction accessor (optional; tests may omit). */
   getCopyTransaction?: () => CopyTransactionReceipt | null;
+  /** Live folding HUD receipt accessor (optional; tests may omit). */
+  getFoldingReceipt?: () => FoldingReceipt | null;
 }
 
 /** Root class guarding ALL diagnostic paint CSS (present only while active). */
@@ -100,6 +103,7 @@ export class XrayController {
   private readonly getCopyTransaction:
     | (() => CopyTransactionReceipt | null)
     | null;
+  private readonly getFoldingReceipt: (() => FoldingReceipt | null) | null;
 
   private active = false;
   private pickerMode = false;
@@ -146,6 +150,7 @@ export class XrayController {
     this.getWritingCopyControllerReceipt =
       deps.getWritingCopyControllerReceipt ?? null;
     this.getCopyTransaction = deps.getCopyTransaction ?? null;
+    this.getFoldingReceipt = deps.getFoldingReceipt ?? null;
   }
 
   // --- state accessors -----------------------------------------------------
@@ -224,6 +229,7 @@ export class XrayController {
       },
       this.getControllerReceipt(),
       this.getCopyTransactionSafe(),
+      this.getFoldingReceiptSafe(),
     );
     this.paint();
     this.host.setStatus(this.statusRows(this.lastScan));
@@ -244,6 +250,16 @@ export class XrayController {
     if (!this.getCopyTransaction) return null;
     try {
       return this.getCopyTransaction();
+    } catch {
+      return null;
+    }
+  }
+
+  /** Live folding HUD receipt, or null when not wired. */
+  private getFoldingReceiptSafe(): FoldingReceipt | null {
+    if (!this.getFoldingReceipt) return null;
+    try {
+      return this.getFoldingReceipt();
     } catch {
       return null;
     }
@@ -387,6 +403,7 @@ export class XrayController {
       },
       this.getControllerReceipt(),
       this.getCopyTransactionSafe(),
+      this.getFoldingReceiptSafe(),
     );
   }
 

@@ -4,17 +4,16 @@
  * Exactly one host exists per page, appended to `document.body` (never
  * inside ChatGPT content), fully self-contained (Shadow DOM, no external
  * assets), and marked with an extension-owned attribute so the structural
- * observer ignores it. It owns:
- *  - one compact toggle button per long code block ("Expand"/"Collapse");
- *  - one toggle button per long assistant response;
- *  - one global "Expand all"/"Collapse all" button for long code blocks.
+ * observer ignores it. It renders a tiny HUD — at most TWO buttons:
+ *  - one active-item toggle bound to the single currently relevant visible
+ *    long target ("Expand/Collapse code|response"), hidden when none;
+ *  - one optional global "Expand all"/"Collapse all" for long code blocks.
  *
- * Buttons are `position: fixed` from live `getBoundingClientRect` geometry,
- * clamped in-viewport, repositioned through ONE rAF-coalesced path on
- * scroll/resize. The controller owns all fold state; the host only renders
- * callbacks (`onToggleCode`, `onToggleResponse`, `onExpandAll`,
- * `onCollapseAll`). Repeated sync never duplicates buttons; teardown removes
- * the host, listeners, timers, and references.
+ * The host retains ONLY the current active target (for its click callback);
+ * all candidate discovery lives in short-lived controller passes. Buttons
+ * are `position: fixed` from live geometry, clamped in-viewport. Repeated
+ * sync never duplicates buttons; teardown removes the host, listeners,
+ * timers, and references.
  */
 
 const HOST_ID = "cgl-folding-host";
@@ -58,22 +57,40 @@ export interface FoldingHostCallbacks {
   onCollapseAll: () => void;
 }
 
-interface ButtonRecord {
-  button: HTMLButtonElement;
+/** The single visible fold target the HUD item button is bound to. */
+export interface ActiveFoldTarget {
   kind: "code" | "response";
   target: HTMLElement;
+  folded: boolean;
 }
 
 export class FoldingHost {
   private host: HTMLElement | null = null;
   private shadow: ShadowRoot | null = null;
   private callbacks: FoldingHostCallbacks | null = null;
-  private buttons = new Map<HTMLElement, ButtonRecord>();
+  private itemButton: HTMLButtonElement | null = null;
+  private itemTarget: HTMLElement | null = null;
+  private itemKind: "code" | "response" | null = null;
   private globalButton: HTMLButtonElement | null = null;
   private globalMode: "expand" | "collapse" | null = null;
 
   get isMounted(): boolean {
     return this.host != null && this.host.isConnected;
+  }
+
+  /** Mounted button elements currently in the DOM (never more than 2). */
+  get buttonCount(): number {
+    let count = 0;
+    if (this.itemButton?.isConnected) count++;
+    if (this.globalButton?.isConnected) count++;
+    return count;
+  }
+
+  /** The single retained active target, or null when the item hides. */
+  get retainedTarget(): HTMLElement | null {
+    return this.itemTarget && this.itemTarget.isConnected
+      ? this.itemTarget
+      : null;
   }
 
   /** Ensure exactly one host exists; (re)bind callbacks idempotently. */
@@ -97,70 +114,55 @@ export class FoldingHost {
   }
 
   /**
-   * Reconcile buttons against live targets. `codes`/`responses` map each
-   * target to its current folded state. Removes buttons for gone targets,
-   * creates buttons for new ones, updates labels, and repositions all.
-   * `anyCodeFolded` selects the global button mode (null hides it).
+   * Reconcile the HUD against the single active target. Binds, relabels, or
+   * removes the one item button; shows/hides the global button by mode
+   * (null hides it); then repositions. Never retains offscreen targets.
    */
   sync(
-    codes: Map<HTMLElement, boolean>,
-    responses: Map<HTMLElement, boolean>,
+    active: ActiveFoldTarget | null,
     anyCodeFolded: boolean | null,
   ): void {
     if (!this.shadow) return;
-    const wanted = new Set<HTMLElement>([...codes.keys(), ...responses.keys()]);
-    for (const [target, record] of [...this.buttons]) {
-      if (!wanted.has(target) || !target.isConnected) {
-        record.button.remove();
-        this.buttons.delete(target);
+    if (!active || !active.target.isConnected) {
+      if (this.itemButton) {
+        this.itemButton.remove();
+        this.itemButton = null;
       }
-    }
-    for (const [target, folded] of codes) {
-      this.ensureButton(target, "code", folded ? "Expand" : "Collapse");
-    }
-    for (const [target, folded] of responses) {
-      this.ensureButton(
-        target,
-        "response",
-        folded ? "Expand response" : "Collapse response",
-      );
+      this.itemTarget = null;
+      this.itemKind = null;
+    } else {
+      const label =
+        active.kind === "code"
+          ? active.folded
+            ? "Expand code"
+            : "Collapse code"
+          : active.folded
+            ? "Expand response"
+            : "Collapse response";
+      if (!this.itemButton) {
+        const btn = document.createElement("button");
+        btn.className = "cgl-fold-btn";
+        btn.type = "button";
+        btn.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const target = this.itemTarget;
+          if (!target) return;
+          if (this.itemKind === "code") this.callbacks?.onToggleCode(target);
+          else this.callbacks?.onToggleResponse(target);
+        });
+        this.shadow.appendChild(btn);
+        this.itemButton = btn;
+      }
+      if (this.itemButton.textContent !== label) {
+        this.itemButton.textContent = label;
+      }
+      this.itemButton.setAttribute("aria-label", label);
+      this.itemTarget = active.target;
+      this.itemKind = active.kind;
     }
     this.syncGlobal(anyCodeFolded);
     this.reposition();
-  }
-
-  private ensureButton(
-    target: HTMLElement,
-    kind: "code" | "response",
-    label: string,
-  ): void {
-    const existing = this.buttons.get(target);
-    if (existing) {
-      if (existing.button.textContent !== label) {
-        existing.button.textContent = label;
-      }
-      existing.button.setAttribute(
-        "aria-label",
-        kind === "code" ? `${label} code block` : label,
-      );
-      return;
-    }
-    const btn = document.createElement("button");
-    btn.className = "cgl-fold-btn";
-    btn.type = "button";
-    btn.textContent = label;
-    btn.setAttribute(
-      "aria-label",
-      kind === "code" ? `${label} code block` : label,
-    );
-    btn.addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      if (kind === "code") this.callbacks?.onToggleCode(target);
-      else this.callbacks?.onToggleResponse(target);
-    });
-    this.shadow!.appendChild(btn);
-    this.buttons.set(target, { button: btn, kind, target });
   }
 
   private syncGlobal(anyCodeFolded: boolean | null): void {
@@ -194,38 +196,46 @@ export class FoldingHost {
     }
   }
 
-  /** Reposition every button against live target geometry (clamped). */
+  /** Reposition the (at most two) buttons against live geometry, clamped. */
   reposition(): void {
     if (!this.host || !this.host.isConnected) return;
     const margin = 6;
     const vw = Math.round(window.innerWidth ?? 0);
     const vh = Math.round(window.innerHeight ?? 0);
-    for (const { button, target } of this.buttons.values()) {
-      const rect = target.getBoundingClientRect();
-      if (rect.width <= 0 || rect.height <= 0) {
-        button.style.display = "none";
-        continue;
+    if (this.itemButton && this.itemTarget) {
+      const rect = this.itemTarget.getBoundingClientRect();
+      if (
+        !this.itemTarget.isConnected ||
+        rect.width <= 0 ||
+        rect.height <= 0
+      ) {
+        this.itemButton.style.display = "none";
+      } else {
+        this.itemButton.style.display = "";
+        const w = this.itemButton.offsetWidth || 110;
+        const h = this.itemButton.offsetHeight || 26;
+        const left = Math.max(margin, Math.min(rect.right - w - margin, vw - w - margin));
+        const top = Math.max(margin, Math.min(rect.top + margin, vh - h - margin));
+        this.itemButton.style.left = `${Math.round(left)}px`;
+        this.itemButton.style.top = `${Math.round(top)}px`;
       }
-      button.style.display = "";
-      // Pin to the target's top-right, clamped fully onscreen.
-      const w = button.offsetWidth || 90;
-      const h = button.offsetHeight || 26;
-      const left = Math.max(margin, Math.min(rect.right - w - margin, vw - w - margin));
-      const top = Math.max(margin, Math.min(rect.top + margin, vh - h - margin));
-      button.style.left = `${Math.round(left)}px`;
-      button.style.top = `${Math.round(top)}px`;
     }
     if (this.globalButton) {
       const w = this.globalButton.offsetWidth || 110;
       const h = this.globalButton.offsetHeight || 26;
       this.globalButton.style.left = `${Math.max(margin, vw - w - margin)}px`;
-      this.globalButton.style.top = `${Math.max(margin, vh - h - margin)}px`;
+      this.globalButton.style.top = `${Math.round(Math.max(margin, vh - h - margin))}px`;
     }
   }
 
   /** Remove the host, its buttons, callbacks, and references. Idempotent. */
   unmount(): void {
-    this.buttons.clear();
+    if (this.itemButton) {
+      this.itemButton.remove();
+      this.itemButton = null;
+    }
+    this.itemTarget = null;
+    this.itemKind = null;
     this.globalButton = null;
     this.globalMode = null;
     this.callbacks = null;
