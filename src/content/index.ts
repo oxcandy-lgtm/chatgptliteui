@@ -108,6 +108,20 @@ let xrayListenerAttached = false;
  */
 let observerEpoch = 0;
 
+/**
+ * Set when a route change was detected; consumed once by the next
+ * syncRuntime so the resolved-background hold applies to exactly one
+ * post-route apply (later applies reconcile normally).
+ */
+let pendingRouteBackgroundHold = false;
+
+/** Consume a pending route background hold (single post-route apply). */
+function consumeRouteBackgroundHold(): boolean {
+  const pending = pendingRouteBackgroundHold;
+  pendingRouteBackgroundHold = false;
+  return pending;
+}
+
 /** Previously applied settings, used to reconcile the observer after a transient toggle. */
 let lastSettings: Settings | null = null;
 
@@ -268,7 +282,13 @@ const scheduleMarkerRefresh = debounce((): void => {
 
 /** Apply settings and connect/disconnect the observer per the active profile. */
 function syncRuntime(settings: Settings): void {
-  applier.apply(settings);
+  // Route-transition hold: exactly one post-route apply preserves the
+  // committed resolved background until the destination reconcile commits.
+  // Ordinary settings changes always reconcile immediately.
+  const holdRouteBackground = consumeRouteBackgroundHold();
+  applier.apply(settings, {
+    preserveResolvedBackground: holdRouteBackground,
+  });
   sidebarController.apply(settings);
   writingCopyController.apply(settings);
 
@@ -640,8 +660,10 @@ function reapplyAfterRouteChange(): void {
   // container. Narrowing adopts the new route's container on the next
   // structural batch and clears the guard.
   preferBroadRoot = true;
-  // The next syncRuntime labels its sidebar color hydration as a route
-  // trigger (true even if the async apply lands after more mutations).
+  // The next syncRuntime holds the committed resolved background (exactly
+  // one post-route apply) and labels its sidebar color hydration as a
+  // route trigger (true even if the async apply lands after more mutations).
+  pendingRouteBackgroundHold = true;
   sidebarRoutePending = true;
   if (
     lastSettings &&

@@ -30,6 +30,19 @@ import type { ChatGptAdapter } from "../../adapters/chatgpt-adapter.js";
  * consumed by `content.css` under the `cgl-active` guard.
  */
 
+/** Options for a route-transition apply that must not flash paint. */
+export interface AppearanceApplyOptions {
+  /**
+   * When true, the currently committed resolved main background
+   * (`cgl-chat-bg-override` + page/conversation vars) is held untouched
+   * until the async destination reconcile commits — the theme apply must
+   * not overwrite those two vars first, and the volatile reset must not
+   * remove them. Consumed once per route transition only; normal settings
+   * changes always reconcile immediately.
+   */
+  preserveResolvedBackground?: boolean;
+}
+
 const CGL_CLASSES = [
   "cgl-active",
   "cgl-no-anim",
@@ -135,14 +148,20 @@ export class AppearanceController {
    * Apply appearance settings.
    * Full teardown-grade restore when disabled; otherwise a volatile-only
    * reset that PRESERVES persistent sidebar chat/project color markers so
-   * route/settings re-applies never flash them to official and back.
+   * route/settings re-applies never flash them to official and back. With
+   * `preserveResolvedBackground` (route transition only), the currently
+   * committed resolved main background is additionally held untouched
+   * until the async destination reconcile commits — the theme apply skips
+   * its page/conversation writes in that window while every other theme
+   * variable updates normally.
    */
-  apply(settings: Settings): void {
+  apply(settings: Settings, options: AppearanceApplyOptions = {}): void {
     if (!settings.enabled) {
       this.restore();
       return;
     }
-    this.restoreVolatile();
+    const hold = options.preserveResolvedBackground === true;
+    this.restoreVolatile(hold);
     if (!hasAppearanceEffects(settings)) return;
 
     this.root.classList.add("cgl-active");
@@ -167,8 +186,13 @@ export class AppearanceController {
     }
     if (a.useTheme) {
       const t = settings.theme;
-      this.root.style.setProperty("--cgl-page-bg", t.pageBackground);
-      this.root.style.setProperty("--cgl-conversation-bg", t.conversationBackground);
+      if (!hold) {
+        // Route hold: leave the committed page/conversation background
+        // painted until the destination reconcile commits (other theme
+        // variables still update normally below).
+        this.root.style.setProperty("--cgl-page-bg", t.pageBackground);
+        this.root.style.setProperty("--cgl-conversation-bg", t.conversationBackground);
+      }
       this.root.style.setProperty("--cgl-user-bg", t.userBackground);
       this.root.style.setProperty("--cgl-assistant-bg", t.assistantBackground);
       this.root.style.setProperty("--cgl-input-bg", t.inputBackground);
@@ -245,11 +269,27 @@ export class AppearanceController {
    * Volatile-only reset for normal settings/route applies: root classes,
    * root variables, appearance surface markers, and active-chat markers.
    * Persistent sidebar chat/project color markers and their element-local
-   * variables are PRESERVED (reconciled separately). Idempotent.
+   * variables are PRESERVED (reconciled separately). With
+   * `preserveResolvedBackground`, the committed resolved main background
+   * (`cgl-chat-bg-override` + page/conversation vars) is additionally held
+   * for the route transition window. Idempotent.
    */
-  restoreVolatile(): void {
-    for (const cls of CGL_CLASSES) this.root.classList.remove(cls);
-    for (const v of CGL_VARS) this.root.style.removeProperty(v);
+  restoreVolatile(preserveResolvedBackground = false): void {
+    for (const cls of CGL_CLASSES) {
+      if (preserveResolvedBackground && cls === "cgl-chat-bg-override") {
+        continue;
+      }
+      this.root.classList.remove(cls);
+    }
+    for (const v of CGL_VARS) {
+      if (
+        preserveResolvedBackground &&
+        (v === "--cgl-page-bg" || v === "--cgl-conversation-bg")
+      ) {
+        continue;
+      }
+      this.root.style.removeProperty(v);
+    }
     // Release references to avoid retaining detached nodes.
     this.marked = [];
     clearAllMarkers(document);
