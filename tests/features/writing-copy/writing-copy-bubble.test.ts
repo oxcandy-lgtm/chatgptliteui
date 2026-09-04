@@ -150,7 +150,7 @@ describe("draggable copy bubble", () => {
     host.positionAgainst(block, "smart");
     const el = dom.window.document.querySelector('[data-cgl-writing-copy-host="true"]') as HTMLElement;
     expect(el.style.left).toBe("306px");
-    expect(el.style.top).toBe("232px");
+    expect(el.style.top).toBe("132px");
 
     const handle = shadowOf(dom).querySelector(".cgl-drag-handle")!;
     handle.dispatchEvent(pointerEvent(dom, "pointerdown", 500, 500));
@@ -158,7 +158,7 @@ describe("draggable copy bubble", () => {
     handle.dispatchEvent(pointerEvent(dom, "pointerup", 540, 530));
 
     expect(el.style.left).toBe("346px");
-    expect(el.style.top).toBe("262px");
+    expect(el.style.top).toBe("162px");
     expect(host.dragOffset).toEqual({ x: 40, y: 30 });
   });
 
@@ -216,7 +216,7 @@ describe("draggable copy bubble", () => {
     host.positionAgainst(blockWith({ top: 400, left: 200, width: 400, height: 200 }, dom), "smart");
     const el = dom.window.document.querySelector('[data-cgl-writing-copy-host="true"]') as HTMLElement;
     expect(el.style.left).toBe(`${300 + 6 + 40}px`);
-    expect(el.style.top).toBe(`${100 + 132 + 30}px`);
+    expect(el.style.top).toBe(`${132 + 30}px`);
     expect(host.dragOffset).toEqual({ x: 40, y: 30 });
   });
 
@@ -255,19 +255,28 @@ describe("draggable copy bubble", () => {
     expect(Number(copyZ)).toBeGreaterThan(Number(panelZ));
   });
 
-  it("smart base is a fixed upper-right anchor, independent of block height", () => {
+  it("smart base is a fixed viewport slot, independent of block geometry", () => {
     expect(INITIAL_ROW_OFFSET_PX).toBe(3 * COPY_BUBBLE_PX);
     dom = installDom();
-    const host = new WritingCopyHost();
-    host.mount(() => {});
-    const el = dom.window.document.querySelector('[data-cgl-writing-copy-host="true"]') as HTMLElement;
-    // Same top/right, very different heights -> identical initial position.
-    host.positionAgainst(blockWith({ top: 100, left: 500, width: 300, height: 200 }, dom), "smart");
+    const firstPlacement = (rect: { top: number; left: number; width: number; height: number }): HTMLElement => {
+      const host = new WritingCopyHost();
+      host.mount(() => {});
+      host.positionAgainst(blockWith(rect, dom), "smart");
+      const el = dom.window.document.querySelector('[data-cgl-writing-copy-host="true"]') as HTMLElement;
+      host.unmount();
+      return el;
+    };
+    // Same right edge, wildly different tops/heights -> identical Y slot.
+    // (864/4520 mirrors the real bottom-of-viewport failure case.)
+    let el = firstPlacement({ top: 100, left: 500, width: 300, height: 200 });
     expect(el.style.left).toBe("806px");
-    expect(el.style.top).toBe("232px");
-    host.positionAgainst(blockWith({ top: 100, left: 500, width: 300, height: 2000 }, dom), "smart");
+    expect(el.style.top).toBe("132px");
+    el = firstPlacement({ top: 100, left: 500, width: 300, height: 2000 });
     expect(el.style.left).toBe("806px");
-    expect(el.style.top).toBe("232px");
+    expect(el.style.top).toBe("132px");
+    el = firstPlacement({ top: 864, left: 500, width: 300, height: 4520 });
+    expect(el.style.left).toBe("806px");
+    expect(el.style.top).toBe("132px");
   });
 
   it("manual offset survives reposition and viewport resize", () => {
@@ -285,7 +294,7 @@ describe("draggable copy bubble", () => {
     // Geometry recalculation keeps the offset.
     host.positionAgainst(blockWith({ top: 100, left: 0, width: 300, height: 200 }, dom), "smart");
     expect(el.style.left).toBe(`${300 + 6 + 20}px`);
-    expect(el.style.top).toBe(`${100 + 132 + 10}px`);
+    expect(el.style.top).toBe(`${132 + 10}px`);
 
     // Viewport resize re-clamps but preserves the offset.
     Object.defineProperty(dom.window, "innerWidth", { value: 612, configurable: true });
