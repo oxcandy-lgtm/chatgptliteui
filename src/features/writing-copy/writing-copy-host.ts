@@ -309,6 +309,16 @@ export class WritingCopyHost {
     const hostH = hostRect.height || COPY_BUBBLE_PX;
     const margin = 6;
 
+    // Viewport position lock: the smart base is placed ONCE (first valid
+    // geometry). Afterwards scrolling, active-target changes, resizes, and
+    // block geometry changes must NOT re-derive the position — only an
+    // explicit user drag (which records a new lastFinal) moves it. Resize
+    // merely re-clamps the remembered position into the current viewport.
+    if (mode === "smart" && this.lastFinal) {
+      this.retainLastPosition();
+      return;
+    }
+
     const { vw, vh } = viewportSize();
 
     let top: number;
