@@ -93,6 +93,22 @@
   color: var(--cgl-text);
 }
 
+/* ---- per-conversation background override (Phase 4) --------------------
+ * A single chat's remembered background wins over the global theme and the
+ * official background, without touching global settings or any other
+ * surface (user/assistant turns, composer, code, WritingBlock, pulse,
+ * copied marker). Placed after the theme rules so equal-specificity ties
+ * resolve to the override. `restore()` removes the class and variables. */
+:root.cgl-chat-bg-override {
+  background-color: var(--cgl-page-bg);
+}
+:root.cgl-chat-bg-override body {
+  background-color: var(--cgl-page-bg);
+}
+:root.cgl-chat-bg-override [data-cgl-conversation-root] {
+  background-color: var(--cgl-conversation-bg);
+}
+
 /* ---- sidebar visibility (Phase 3): guarded, marker-only, non-destructive ----
  * The only permitted mutation on the ChatGPT sidebar is the extension-owned
  * marker `data-cgl-sidebar-target="true"`. Hiding is performed by adding the

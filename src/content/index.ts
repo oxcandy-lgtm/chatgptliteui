@@ -13,6 +13,12 @@ import { SidebarController } from "../features/sidebar/sidebar-controller.js";
 import { findSafeSidebarTarget, SIDEBAR_HOST_ID } from "../features/sidebar/sidebar-detection.js";
 import { WritingCopyController, WRITING_COPY_HOST_ATTR } from "../features/writing-copy/writing-copy-controller.js";
 import { hasWritingCopyEffects } from "../features/writing-copy/writing-copy-state.js";
+import { conversationFingerprintFromLocation } from "../features/writing-copy/block-identity.js";
+import {
+  CONVERSATION_APPEARANCE_PREFIX,
+  CURRENT_CONVERSATION_KEY,
+  publishCurrentConversationFingerprint,
+} from "../features/appearance/conversation-background.js";
 import {
   XrayController,
   isXrayShortcut,
@@ -92,6 +98,31 @@ let observerEpoch = 0;
 
 /** Previously applied settings, used to reconcile the observer after a transient toggle. */
 let lastSettings: Settings | null = null;
+
+/**
+ * Last conversation fingerprint published to storage (change guard — the
+ * pointer write happens at most once per route, never per refresh).
+ */
+let lastPublishedConversationFp: string | null | undefined = undefined;
+
+/**
+ * Publish the current conversation identity for the popup (fingerprint
+ * only — never URL/token/title/text) and apply any stored per-chat
+ * background override. Best-effort async; never blocks the sync apply.
+ */
+function syncConversationAppearance(settings: Settings): void {
+  void (async () => {
+    if (quiesced) return;
+    const fp = await conversationFingerprintFromLocation();
+    if (fp !== lastPublishedConversationFp) {
+      lastPublishedConversationFp = fp;
+      await publishCurrentConversationFingerprint(fp);
+    }
+    if (settings.enabled) {
+      await applier.applyConversationBackgroundOverride(fp);
+    }
+  })();
+}
 
 /** Whether this runtime has been quiesced (extension context invalidated). */
 let quiesced = false;
@@ -182,6 +213,10 @@ function syncRuntime(settings: Settings): void {
   } else {
     disconnectObserver();
   }
+
+  // Per-chat background: publish identity for the popup + apply any stored
+  // override for this conversation (falls back cleanly when none exists).
+  syncConversationAppearance(settings);
 
   lastSettings = settings;
 }
@@ -597,7 +632,24 @@ async function bootstrap(): Promise<void> {
   if (typeof chrome !== "undefined" && chrome.storage?.onChanged) {
     storageChangeListener = (changes, area) => {
       if (area !== "local") return;
-      if (!("settings" in changes)) return;
+      if (!("settings" in changes)) {
+        // Live per-chat background update (popup save/reset): no settings
+        // reload needed — just re-apply the override for this conversation.
+        if (
+          Object.keys(changes).some(
+            (k) =>
+              k === CURRENT_CONVERSATION_KEY ||
+              k.startsWith(CONVERSATION_APPEARANCE_PREFIX),
+          )
+        ) {
+          void (async () => {
+            if (quiesced || !lastSettings?.enabled) return;
+            const fp = await conversationFingerprintFromLocation();
+            await applier.applyConversationBackgroundOverride(fp);
+          })();
+        }
+        return;
+      }
       void getSettings()
         .then((s) => {
           // Fix 5: clear transient state only for relevant changes.

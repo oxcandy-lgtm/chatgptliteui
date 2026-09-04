@@ -4,6 +4,15 @@ import {
   applyAppearancePreset,
   detectAppearancePreset,
 } from "../features/appearance/presets.js";
+import {
+  clearConversationBackground,
+  getConversationBackground,
+  readCurrentConversationFingerprint,
+  setConversationBackground,
+} from "../features/appearance/conversation-background.js";
+
+/** Default picker value when a chat has no stored override yet. */
+const DEFAULT_CHAT_BACKGROUND = "#101827";
 
 function bind(): void {
   const enabled = document.getElementById("enabled") as HTMLInputElement | null;
@@ -94,6 +103,102 @@ function bind(): void {
       });
     }
     if (status) status.textContent = "Settings loaded.";
+    void bindChatBackground(status);
+  });
+}
+
+/**
+ * Per-chat background section. Identity comes ONLY from the fingerprint the
+ * content script publishes — the popup never reads tab URLs, titles, or chat
+ * text. Saves apply live via storage (the content script re-applies on
+ * change); no messaging, no new permissions.
+ */
+async function bindChatBackground(
+  status: HTMLParagraphElement | null,
+): Promise<void> {
+  const identity = document.getElementById("chat-identity") as HTMLParagraphElement | null;
+  const enabled = document.getElementById("chatBackgroundEnabled") as HTMLInputElement | null;
+  const picker = document.getElementById("chatBackgroundColor") as HTMLInputElement | null;
+  const reset = document.getElementById("chatBackgroundReset") as HTMLButtonElement | null;
+  if (!identity || !enabled || !picker || !reset) return;
+
+  const setDisabled = (message: string): void => {
+    identity.textContent = message;
+    enabled.disabled = true;
+    picker.disabled = true;
+    reset.disabled = true;
+  };
+
+  let fingerprint: string | null;
+  try {
+    fingerprint = await readCurrentConversationFingerprint();
+  } catch {
+    setDisabled("Could not read chat identity.");
+    return;
+  }
+  if (!fingerprint) {
+    setDisabled("This page has no saved chat identity.");
+    return;
+  }
+
+  let stored: string | null;
+  try {
+    stored = await getConversationBackground(fingerprint);
+  } catch {
+    setDisabled("Could not read chat background.");
+    return;
+  }
+  identity.textContent = stored
+    ? "Custom background saved for this chat."
+    : "No custom background for this chat.";
+  enabled.checked = stored !== null;
+  picker.value = stored ?? DEFAULT_CHAT_BACKGROUND;
+  picker.disabled = !enabled.checked;
+
+  const save = (): void => {
+    if (!enabled.checked) return;
+    const color = picker.value;
+    void setConversationBackground(fingerprint, color)
+      .then((ok) => {
+        identity.textContent = ok
+          ? "Custom background saved for this chat."
+          : "Save failed.";
+        if (status && ok) status.textContent = "Chat background saved.";
+      })
+      .catch(() => {
+        identity.textContent = "Save failed.";
+      });
+  };
+
+  enabled.addEventListener("change", () => {
+    picker.disabled = !enabled.checked;
+    if (!enabled.checked) {
+      // Unchecking removes the override (falls back to global/official).
+      void clearConversationBackground(fingerprint)
+        .then(() => {
+          identity.textContent = "No custom background for this chat.";
+        })
+        .catch(() => {
+          identity.textContent = "Reset failed.";
+        });
+    } else {
+      save();
+    }
+  });
+  // Live update while picking; the open ChatGPT page follows via storage.
+  picker.addEventListener("input", save);
+  reset.addEventListener("click", () => {
+    void clearConversationBackground(fingerprint)
+      .then(() => {
+        enabled.checked = false;
+        picker.disabled = true;
+        picker.value = DEFAULT_CHAT_BACKGROUND;
+        identity.textContent = "No custom background for this chat.";
+        if (status) status.textContent = "Chat background reset.";
+      })
+      .catch(() => {
+        identity.textContent = "Reset failed.";
+      });
   });
 }
 

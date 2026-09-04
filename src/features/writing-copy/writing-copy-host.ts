@@ -165,6 +165,12 @@ export class WritingCopyHost {
   private manualOffset: { x: number; y: number } = { x: 0, y: 0 };
   /** Last successfully applied final position (zero-size continuity). */
   private lastFinal: { top: number; left: number } | null = null;
+  /**
+   * Explicit user placement: set ONLY by a real drag that moves the bubble
+   * (never inferred from offset magnitude, so dragging back near the origin
+   * still counts as user-placed). Session-local; cleared on teardown.
+   */
+  private userPlaced = false;
   /** Last smart (pre-offset) position, so drags rebase cleanly. */
   private smartBase: { top: number; left: number } | null = null;
 
@@ -205,6 +211,22 @@ export class WritingCopyHost {
   /** Current session-local manual drag offset (copy of internal state). */
   get dragOffset(): { x: number; y: number } {
     return { ...this.manualOffset };
+  }
+
+  /** True once the user has really dragged the bubble in this session. */
+  get isUserPlaced(): boolean {
+    return this.userPlaced;
+  }
+
+  /**
+   * Drop ONLY the automatic anchor so the next smart placement recomputes
+   * fresh (e.g. a genuinely new WritingBlock became active). No-op after a
+   * user drag — the dragged position stays authoritative. Never touches
+   * copied state, presentation state, or the manual offset itself.
+   */
+  resetAutoAnchorForNewWritingBlock(): void {
+    if (this.userPlaced) return;
+    this.lastFinal = null;
   }
 
   /**
@@ -398,6 +420,9 @@ export class WritingCopyHost {
     e.stopPropagation();
     const start = this.dragStart ?? { x: 0, y: 0 };
     const base = this.dragOffsetStart ?? { x: 0, y: 0 };
+    if (e.clientX !== start.x || e.clientY !== start.y) {
+      this.userPlaced = true;
+    }
     this.manualOffset = {
       x: base.x + (e.clientX - start.x),
       y: base.y + (e.clientY - start.y),
@@ -589,6 +614,7 @@ export class WritingCopyHost {
     this.manualOffset = { x: 0, y: 0 };
     this.smartBase = null;
     this.lastFinal = null;
+    this.userPlaced = false;
   }
 }
 

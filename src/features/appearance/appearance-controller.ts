@@ -9,6 +9,7 @@ import {
   hasAppearanceEffects,
   isSafeCosmeticDetection,
 } from "./presets.js";
+import { getConversationBackground } from "./conversation-background.js";
 import type { ChatGptAdapter } from "../../adapters/chatgpt-adapter.js";
 
 /**
@@ -36,6 +37,7 @@ const CGL_CLASSES = [
   "cgl-width",
   "cgl-font",
   "cgl-theme",
+  "cgl-chat-bg-override",
 ] as const;
 
 const CGL_VARS = [
@@ -167,6 +169,25 @@ export class AppearanceController {
     // Mark surfaces last so styles have targets; harmless if detection fails.
     this.adapter.refresh();
     this.markSurfaces();
+  }
+
+  /**
+   * Apply the per-conversation background override for `conversationFp`
+   * (when one is stored). Async storage read; no-op when absent, invalid, or
+   * when `conversationFp` is null. Overrides ONLY the page/conversation
+   * background variables — never user/assistant/code/writing/pulse/marker
+   * values and never global theme settings. Call only while enabled;
+   * `restore()` (start of `apply()`) already removed any previous override.
+   */
+  async applyConversationBackgroundOverride(
+    conversationFp: string | null,
+  ): Promise<void> {
+    if (!conversationFp) return;
+    const background = await getConversationBackground(conversationFp);
+    if (!background) return;
+    this.root.classList.add("cgl-chat-bg-override");
+    this.root.style.setProperty("--cgl-page-bg", background);
+    this.root.style.setProperty("--cgl-conversation-bg", background);
   }
 
   /**
