@@ -36,6 +36,22 @@ const ROW_MAX_WIDTH_PX = 420;
 /** Maximum left edge for the preferred left-sidebar zone. */
 const SIDEBAR_ZONE_PX = 420;
 
+/**
+ * Conversation token extracted from a pathname with the SAME rule as the
+ * location identity parser (`/c/<token>` anywhere in the path), so Project
+ * routes (`/g/<project>/c/<token>`) match their conversation. Returns null
+ * when the pathname carries no conversation token. Never persisted.
+ */
+export function extractConversationTokenFromPath(pathname: string): string | null {
+  try {
+    const match = pathname.match(/\/c\/([^/?]+)/);
+    const token = match?.[1];
+    return token ? decodeURIComponent(token) : null;
+  } catch {
+    return null;
+  }
+}
+
 /** A route-matching anchor measurably visible inside the viewport. */
 function isCandidateVisible(a: HTMLElement): boolean {
   if (!a.isConnected) return false;
@@ -60,13 +76,22 @@ export function syncActiveChatRow(token: string | null): HTMLElement | null {
       el.removeAttribute(ACTIVE_CHAT_ROW_ATTR);
       el.removeAttribute(ACTIVE_CHAT_SURFACE_ATTR);
     });
-  if (!token) return null;
+  if (!token) {
+    recordDiagnostic({
+      routeCandidateCount: 0,
+      tokenMatchCount: 0,
+      rowMarked: false,
+      surfaceMarked: false,
+    });
+    return null;
+  }
 
-  const wantedPath = `/c/${token}`;
   const vw = window.innerWidth || 0;
   const sidebarBound = Math.min(SIDEBAR_ZONE_PX, vw * 0.4);
   type Scored = { el: HTMLAnchorElement; left: number; width: number; top: number; inZone: boolean };
   const scored: Scored[] = [];
+  let routeCandidateCount = 0;
+  let tokenMatchCount = 0;
   for (const a of Array.from(
     document.querySelectorAll<HTMLAnchorElement>('a[href*="/c/"]'),
   )) {
@@ -80,7 +105,12 @@ export function syncActiveChatRow(token: string | null): HTMLElement | null {
     } catch {
       continue;
     }
-    if (path !== wantedPath && !path.startsWith(`${wantedPath}/`)) continue;
+    routeCandidateCount++;
+    // Token equality (NOT whole-pathname equality): standard `/c/<token>`
+    // and Project `/g/<project>/c/<token>` links match the same current
+    // conversation. Project IDs are never compared or persisted.
+    if (extractConversationTokenFromPath(path) !== token) continue;
+    tokenMatchCount++;
     if (!isCandidateVisible(a)) continue;
     const rect = a.getBoundingClientRect();
     scored.push({
@@ -91,7 +121,10 @@ export function syncActiveChatRow(token: string | null): HTMLElement | null {
       inZone: rect.left < sidebarBound,
     });
   }
-  if (scored.length === 0) return null;
+  if (scored.length === 0) {
+    recordDiagnostic({ routeCandidateCount, tokenMatchCount, rowMarked: false, surfaceMarked: false });
+    return null;
+  }
   // Left-sidebar zone first, then leftmost, then narrower (sidebar-sized),
   // then topmost. Never a main-body duplicate.
   scored.sort(
@@ -108,9 +141,48 @@ export function syncActiveChatRow(token: string | null): HTMLElement | null {
   // is the anchor itself.
   const surface = deriveRowSurface(winner);
   surface.setAttribute(ACTIVE_CHAT_SURFACE_ATTR, "true");
+  recordDiagnostic({
+    routeCandidateCount,
+    tokenMatchCount,
+    rowMarked: true,
+    surfaceMarked: true,
+  });
   return winner;
 }
 
+/** Tiny structural receipt for X-Ray (counts/flags only — never token/URL). */
+export interface ActiveChatRowDiagnostic {
+  activeChatRouteCandidateCount: number;
+  activeChatTokenMatchCount: number;
+  activeChatRowMarked: boolean;
+  activeChatSurfaceMarked: boolean;
+}
+
+let lastDiagnostic: ActiveChatRowDiagnostic = {
+  activeChatRouteCandidateCount: 0,
+  activeChatTokenMatchCount: 0,
+  activeChatRowMarked: false,
+  activeChatSurfaceMarked: false,
+};
+
+function recordDiagnostic(partial: {
+  routeCandidateCount: number;
+  tokenMatchCount: number;
+  rowMarked: boolean;
+  surfaceMarked: boolean;
+}): void {
+  lastDiagnostic = {
+    activeChatRouteCandidateCount: partial.routeCandidateCount,
+    activeChatTokenMatchCount: partial.tokenMatchCount,
+    activeChatRowMarked: partial.rowMarked,
+    activeChatSurfaceMarked: partial.surfaceMarked,
+  };
+}
+
+/** Most recent active-chat-row sync outcome (X-Ray diagnostics only). */
+export function getActiveChatRowDiagnostic(): ActiveChatRowDiagnostic {
+  return { ...lastDiagnostic };
+}
 /** Count distinct conversation anchors under a node (grouping detector). */
 function conversationAnchorCount(root: ParentNode): number {
   const paths = new Set<string>();
@@ -174,4 +246,10 @@ export function clearActiveChatRowMarkers(
       el.removeAttribute(ACTIVE_CHAT_ROW_ATTR);
       el.removeAttribute(ACTIVE_CHAT_SURFACE_ATTR);
     });
+  lastDiagnostic = {
+    activeChatRouteCandidateCount: 0,
+    activeChatTokenMatchCount: 0,
+    activeChatRowMarked: false,
+    activeChatSurfaceMarked: false,
+  };
 }

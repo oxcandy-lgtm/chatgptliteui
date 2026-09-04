@@ -22,6 +22,10 @@ import {
   type RuntimeHealthSnapshot,
 } from "../../shared/runtime-health.js";
 import type { CopyTransactionReceipt } from "../writing-copy/writing-copy-controller.js";
+import {
+  getActiveChatRowDiagnostic,
+  type ActiveChatRowDiagnostic,
+} from "../appearance/active-chat-row.js";
 
 /** Top-level report schema (stable). */
 export interface XrayReportV1 {
@@ -53,6 +57,12 @@ export interface XrayReportV1 {
    */
   writingBlockFallback: XrayScan["writingBlockFallback"];
   writingPipeline: XrayScan["writingPipeline"];
+  /**
+   * Active sidebar chat highlight receipt (counts/flags only — never token,
+   * URL, title, or project ID): how many route anchors were collected, how
+   * many token-matched, and whether the row/surface markers are present.
+   */
+  activeChat: ActiveChatRowDiagnostic;
   editableRegions: unknown[];
   actions: unknown[];
   pickedTarget:
@@ -313,6 +323,7 @@ export function buildXrayReport(
     containerFallback: scan.containerFallback,
     writingBlockFallback: scan.writingBlockFallback,
     writingPipeline: scan.writingPipeline,
+    activeChat: getActiveChatRowDiagnostic(),
     editableRegions: scan.editableRegions,
     actions: scan.actions,
     pickedTarget,
