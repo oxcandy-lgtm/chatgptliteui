@@ -508,8 +508,6 @@ export class WritingCopyController {
     // (clears stale surfaces from replaced DOM, then re-marks resolved
     // ones). Semantic identity stays on the editors; surfaces are paint.
     syncWritingBlockSurfaces(this.adapter, safe);
-  }
-    }
     if (safe.length > 0) {
       this.tracker.refresh();
       const tracked = this.tracker.candidatesList;
