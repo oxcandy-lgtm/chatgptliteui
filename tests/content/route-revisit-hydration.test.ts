@@ -31,12 +31,21 @@ const TEXT_C = "Other conversation gamma.";
 
 class FakeMutationObserver {
   static last: FakeMutationObserver | null = null;
+  static instances: FakeMutationObserver[] = [];
+  /** Most recent STRUCTURAL observer (excludes the tagged sidebar observer). */
+  static structuralLast(): FakeMutationObserver | null {
+    const list = FakeMutationObserver.instances.filter(
+      (o) => !(o as unknown as Record<string, unknown>).cglSidebarColorObserver,
+    );
+    return list.length > 0 ? list[list.length - 1]! : null;
+  }
   cb: (mutations: MutationRecord[], obs: FakeMutationObserver) => void;
   target: Node | null = null;
   disconnected = false;
   constructor(cb: (mutations: MutationRecord[], obs: FakeMutationObserver) => void) {
     this.cb = cb;
     FakeMutationObserver.last = this;
+    FakeMutationObserver.instances.push(this);
   }
   observe(target: Node): void {
     this.target = target;
@@ -258,6 +267,7 @@ describe("route revisit hydration (C1 -> C2 -> C1)", () => {
     historyGateWaiters = [];
     historyGateHits = 0;
     FakeMutationObserver.last = null;
+    FakeMutationObserver.instances = [];
   });
 
   afterEach(() => {
@@ -271,6 +281,7 @@ describe("route revisit hydration (C1 -> C2 -> C1)", () => {
       }
     });
     FakeMutationObserver.last = null;
+    FakeMutationObserver.instances = [];
     dom?.window.close();
   });
 
@@ -307,12 +318,12 @@ describe("route revisit hydration (C1 -> C2 -> C1)", () => {
     // on document.body — NOT on the outgoing (still-connected) container that
     // React is about to remove. A dead root would never see the C2 render.
     await settle();
-    expect(FakeMutationObserver.last?.target).toBe(dom.window.document.body);
+    expect(FakeMutationObserver.structuralLast()?.target).toBe(dom.window.document.body);
 
     // React renders C2 (wholesale replacement, as a real route render does).
     dom.window.document.body.innerHTML = C2_HTML(TEXT_C);
     const c2block = dom.window.document.getElementById("block-c")!;
-    FakeMutationObserver.last!.trigger([c2block]);
+    FakeMutationObserver.structuralLast()!.trigger([c2block]);
     await until(() => stateOf("block-c") === "uncopied");
     // No leak: C1's copied record does not mark C2, storage untouched.
     expect(historyKeys()).toEqual([keyC1]);
@@ -323,7 +334,7 @@ describe("route revisit hydration (C1 -> C2 -> C1)", () => {
     // NOTE: the skeleton swap races the navigation signal either way; the
     // body root observes both orders. Settle, then require the broad root.
     await settle();
-    expect(FakeMutationObserver.last?.target).toBe(dom.window.document.body);
+    expect(FakeMutationObserver.structuralLast()?.target).toBe(dom.window.document.body);
     // Vulnerable window: the re-apply's hydration ran against the skeleton
     // (zero blocks) and claimed nothing. No batch is delivered for the
     // skeleton itself — the body root simply stays live.
@@ -335,7 +346,7 @@ describe("route revisit hydration (C1 -> C2 -> C1)", () => {
     dom.window.document.body.innerHTML = C1_HTML(TEXT_A, TEXT_B);
     const retA = dom.window.document.getElementById("block-a")!;
     const retB = dom.window.document.getElementById("block-b")!;
-    FakeMutationObserver.last!.trigger([retA, retB]);
+    FakeMutationObserver.structuralLast()!.trigger([retA, retB]);
 
     // WITHOUT any scroll, manual refresh, or further call: A restores copied,
     // B stays uncopied, the Highlight range is recreated. Zero-size rects mean
@@ -344,7 +355,7 @@ describe("route revisit hydration (C1 -> C2 -> C1)", () => {
     expect(stateOf("block-b")).toBe("uncopied");
     await until(() => mod.writingCopyController.visualLayer.rangeCount === 1);
     // The narrowing adopted the new container (guard released for the route).
-    expect(FakeMutationObserver.last?.target).not.toBe(dom.window.document.body);
+    expect(FakeMutationObserver.structuralLast()?.target).not.toBe(dom.window.document.body);
     // Host stays hidden with nothing visible, yet state hydrated.
     expect(mod.writingCopyController.isHostMounted).toBe(true);
     expect(
@@ -363,7 +374,7 @@ describe("route revisit hydration (C1 -> C2 -> C1)", () => {
     await settle();
     // Steady state on C1: observer narrowed to the live container (main).
     const container = dom.window.document.querySelector('main[role="main"]')!;
-    expect(FakeMutationObserver.last?.target).toBe(container);
+    expect(FakeMutationObserver.structuralLast()?.target).toBe(container);
 
     // Park every future settings read: the async re-apply cannot proceed.
     settingsGate = [];
@@ -371,7 +382,7 @@ describe("route revisit hydration (C1 -> C2 -> C1)", () => {
     // REGRESSION 2: BEFORE settings resolve, the observer must already sit
     // on document.body — not on the outgoing C1 container. Fails on 3bf61cb
     // (flag-only: the move waited for the parked getSettings()).
-    expect(FakeMutationObserver.last?.target).toBe(dom.window.document.body);
+    expect(FakeMutationObserver.structuralLast()?.target).toBe(dom.window.document.body);
     expect(settingsGate).toHaveLength(1);
 
     // Release: the re-apply completes against the still-present C1 DOM, now
@@ -385,9 +396,9 @@ describe("route revisit hydration (C1 -> C2 -> C1)", () => {
     // narrowing adopts the replacement container.
     dom.window.document.body.innerHTML = C2_HTML(TEXT_C);
     const c2block = dom.window.document.getElementById("block-c")!;
-    FakeMutationObserver.last!.trigger([c2block]);
+    FakeMutationObserver.structuralLast()!.trigger([c2block]);
     await until(() => stateOf("block-c") === "uncopied");
-    expect(FakeMutationObserver.last?.target).not.toBe(dom.window.document.body);
+    expect(FakeMutationObserver.structuralLast()?.target).not.toBe(dom.window.document.body);
   });
 
   it("rapid C1 -> C2 -> C1 resolves stale hydrations to the final route only", { timeout: 30000 }, async () => {
@@ -419,7 +430,7 @@ describe("route revisit hydration (C1 -> C2 -> C1)", () => {
     historyGateKeys.add(keyC2);
     navigation.dispatch("currententrychange");
     dom.window.document.body.innerHTML = C2_HTML(TEXT_C);
-    FakeMutationObserver.last!.trigger([
+    FakeMutationObserver.structuralLast()!.trigger([
       dom.window.document.getElementById("block-c")!,
     ]);
     await until(() => historyGateHits > 0);
@@ -428,7 +439,7 @@ describe("route revisit hydration (C1 -> C2 -> C1)", () => {
     // must win; the stale C2 result must never mutate C1 state on release.
     navigate("/c/conv-one");
     dom.window.document.body.innerHTML = C1_HTML(TEXT_A, TEXT_B);
-    FakeMutationObserver.last!.trigger([
+    FakeMutationObserver.structuralLast()!.trigger([
       dom.window.document.getElementById("block-a")!,
       dom.window.document.getElementById("block-b")!,
     ]);

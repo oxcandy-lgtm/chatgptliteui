@@ -11,12 +11,21 @@ import type { Settings, StoredSettingsEnvelope } from "../../src/shared/types.js
  */
 class FakeMutationObserver {
   static last: FakeMutationObserver | null = null;
+  static instances: FakeMutationObserver[] = [];
+  /** Most recent STRUCTURAL observer (excludes the tagged sidebar observer). */
+  static structuralLast(): FakeMutationObserver | null {
+    const list = FakeMutationObserver.instances.filter(
+      (o) => !(o as unknown as Record<string, unknown>).cglSidebarColorObserver,
+    );
+    return list.length > 0 ? list[list.length - 1]! : null;
+  }
   cb: (mutations: MutationRecord[], obs: FakeMutationObserver) => void;
   target: Node | null = null;
   disconnected = false;
   constructor(cb: (mutations: MutationRecord[], obs: FakeMutationObserver) => void) {
     this.cb = cb;
     FakeMutationObserver.last = this;
+    FakeMutationObserver.instances.push(this);
   }
   observe(target: Node): void {
     this.target = target;
@@ -118,6 +127,7 @@ describe("Scoped mutation observer + route lifecycle (Fix 1/2)", () => {
     delete g.Node;
     delete g.chrome;
     FakeMutationObserver.last = null;
+    FakeMutationObserver.instances = [];
   });
 
   function thread(): Element {
@@ -140,7 +150,7 @@ describe("Scoped mutation observer + route lifecycle (Fix 1/2)", () => {
 
   it("marks a newly appended user turn", async () => {
     const turn = appendUser();
-    FakeMutationObserver.last!.trigger([turn]);
+    FakeMutationObserver.structuralLast()!.trigger([turn]);
     await flushDebounce();
     expect(
       dom.window.document.querySelectorAll("[data-cgl-user-turn]").length,
@@ -149,7 +159,7 @@ describe("Scoped mutation observer + route lifecycle (Fix 1/2)", () => {
 
   it("marks a newly appended assistant turn", async () => {
     const turn = appendAssistant();
-    FakeMutationObserver.last!.trigger([turn]);
+    FakeMutationObserver.structuralLast()!.trigger([turn]);
     await flushDebounce();
     expect(
       dom.window.document.querySelectorAll("[data-cgl-assistant-turn]").length,
@@ -158,7 +168,7 @@ describe("Scoped mutation observer + route lifecycle (Fix 1/2)", () => {
 
   it("same-route message additions receive active theme markers", async () => {
     const turn = appendAssistant();
-    FakeMutationObserver.last!.trigger([turn]);
+    FakeMutationObserver.structuralLast()!.trigger([turn]);
     await flushDebounce();
     expect(
       dom.window.document.documentElement.classList.contains("cgl-theme"),
@@ -172,7 +182,7 @@ describe("Scoped mutation observer + route lifecycle (Fix 1/2)", () => {
     dom.reconfigure({ url: "https://chatgpt.com/c/bbb" });
     dom.window.history.pushState({}, "", "https://chatgpt.com/c/bbb");
     const turn = appendUser();
-    FakeMutationObserver.last!.trigger([turn]);
+    FakeMutationObserver.structuralLast()!.trigger([turn]);
     await flushDebounce();
     expect(onChangeCalls).toBeGreaterThanOrEqual(1);
   });
@@ -183,7 +193,7 @@ describe("Scoped mutation observer + route lifecycle (Fix 1/2)", () => {
       dom.reconfigure({ url: `https://chatgpt.com/c/${id}` });
       dom.window.history.pushState({}, "", `https://chatgpt.com/c/${id}`);
       const turn = appendUser();
-      FakeMutationObserver.last!.trigger([turn]);
+      FakeMutationObserver.structuralLast()!.trigger([turn]);
       await flushDebounce();
     }
     expect(onChangeCalls - before).toBe(3);
@@ -191,7 +201,7 @@ describe("Scoped mutation observer + route lifecycle (Fix 1/2)", () => {
 
   it("teardown disconnects observer and clears markers", async () => {
     const turn = appendAssistant();
-    FakeMutationObserver.last!.trigger([turn]);
+    FakeMutationObserver.structuralLast()!.trigger([turn]);
     await flushDebounce();
     expect(
       dom.window.document.querySelectorAll("[data-cgl-assistant-turn]").length,
@@ -241,7 +251,7 @@ describe("Scoped mutation observer + route lifecycle (Fix 1/2)", () => {
     mod.syncRuntime(work);
     const before = dom.window.document.querySelectorAll("[data-cgl-user-turn]").length;
     const turn = appendUser();
-    FakeMutationObserver.last!.trigger([turn]);
+    FakeMutationObserver.structuralLast()!.trigger([turn]);
     await flushDebounce();
     expect(
       dom.window.document.querySelectorAll("[data-cgl-user-turn]").length,
@@ -253,7 +263,7 @@ describe("Scoped mutation observer + route lifecycle (Fix 1/2)", () => {
     setEnv(normal);
     mod.syncRuntime(normal);
     const turn = appendUser();
-    FakeMutationObserver.last!.trigger([turn]);
+    FakeMutationObserver.structuralLast()!.trigger([turn]);
     await flushDebounce();
     expect(
       dom.window.document.querySelectorAll("[data-cgl-user-turn]").length,
@@ -269,7 +279,7 @@ describe("Scoped mutation observer + route lifecycle (Fix 1/2)", () => {
     mod.syncRuntime(work);
     const before = dom.window.document.querySelectorAll("[data-cgl-user-turn]").length;
     const turn = appendUser();
-    FakeMutationObserver.last!.trigger([turn]);
+    FakeMutationObserver.structuralLast()!.trigger([turn]);
     await flushDebounce();
     expect(
       dom.window.document.querySelectorAll("[data-cgl-user-turn]").length,
@@ -278,7 +288,7 @@ describe("Scoped mutation observer + route lifecycle (Fix 1/2)", () => {
 
   it("teardown cancels a pending debounced refresh so it cannot re-mark", async () => {
     const turn = appendUser();
-    FakeMutationObserver.last!.trigger([turn]);
+    FakeMutationObserver.structuralLast()!.trigger([turn]);
     // Do NOT wait for the debounce; tear down immediately.
     mod.teardown();
     await flushDebounce();
@@ -293,7 +303,7 @@ describe("Scoped mutation observer + route lifecycle (Fix 1/2)", () => {
     for (let i = 0; i < 5; i++) turns.push(appendUser());
     for (let i = 0; i < 5; i++) turns.push(appendAssistant());
     // A single triggered batch (coalesced) schedules exactly one debounced refresh.
-    FakeMutationObserver.last!.trigger(turns);
+    FakeMutationObserver.structuralLast()!.trigger(turns);
     // Immediately after the trigger: debounce pending, no new marks yet.
     await flush();
     const immediate = dom.window.document.querySelectorAll("[data-cgl-user-turn]").length;

@@ -29,8 +29,10 @@ import {
 import {
   getProjectAppearanceDiagnostic,
   getSidebarChatColorDiagnostic,
+  getSidebarHydrationReceipt,
   type ProjectAppearanceDiagnostic,
   type SidebarChatColorDiagnostic,
+  type SidebarHydrationReceipt,
 } from "../appearance/sidebar-chat-colors.js";
 
 /** Top-level report schema (stable). */
@@ -69,6 +71,13 @@ export interface XrayReportV1 {
    * and painted rows. Never token/URL/title/project ID.
    */
   sidebarChatColor: SidebarChatColorDiagnostic;
+  /**
+   * Sidebar color hydration scheduling receipt (triggers/timing only):
+   * run count, last trigger, last duration, and max concurrency (always 1
+   * by construction of the coalescing gate). Generic conversation mutation
+   * must never appear as a trigger.
+   */
+  sidebarHydration: SidebarHydrationReceipt;
   /**
    * Project background inheritance receipt (counts only — never raw IDs,
    * URLs, or titles): current project identity availability, visible
@@ -344,6 +353,7 @@ export function buildXrayReport(
     writingPipeline: scan.writingPipeline,
     activeChat: getActiveChatRowDiagnostic(),
     sidebarChatColor: getSidebarChatColorDiagnostic(),
+    sidebarHydration: getSidebarHydrationReceipt(),
     projectAppearance: getProjectAppearanceDiagnostic(),
     editableRegions: scan.editableRegions,
     actions: scan.actions,

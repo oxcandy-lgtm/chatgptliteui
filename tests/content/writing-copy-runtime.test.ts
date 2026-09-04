@@ -5,12 +5,21 @@ import type { Settings } from "../../src/shared/types.js";
 
 class FakeMutationObserver {
   static last: FakeMutationObserver | null = null;
+  static instances: FakeMutationObserver[] = [];
+  /** Most recent STRUCTURAL observer (excludes the tagged sidebar observer). */
+  static structuralLast(): FakeMutationObserver | null {
+    const list = FakeMutationObserver.instances.filter(
+      (o) => !(o as unknown as Record<string, unknown>).cglSidebarColorObserver,
+    );
+    return list.length > 0 ? list[list.length - 1]! : null;
+  }
   cb: (mutations: MutationRecord[], obs: FakeMutationObserver) => void;
   target: Node | null = null;
   disconnected = false;
   constructor(cb: (mutations: MutationRecord[], obs: FakeMutationObserver) => void) {
     this.cb = cb;
     FakeMutationObserver.last = this;
+    FakeMutationObserver.instances.push(this);
   }
   observe(target: Node): void {
     this.target = target;
@@ -117,6 +126,7 @@ describe("writing-copy runtime integration", () => {
     g.Node = dom.window.Node;
     g.MutationObserver = FakeMutationObserver;
     FakeMutationObserver.last = null;
+    FakeMutationObserver.instances = [];
     listeners.clear();
     dom.window.document.addEventListener = ((type: string, cb: (e: KeyboardEvent) => void) => {
       if (!listeners.has(type)) listeners.set(type, new Set());
@@ -144,7 +154,7 @@ describe("writing-copy runtime integration", () => {
     const s = makeSettings({ appearance: cloneDefaults().appearance, sidebar: { mode: "visible" }, writingCopy: { ...cloneDefaults().writingCopy, enabled: true, position: "middle-right", shortcutEnabled: true } });
     mod.syncRuntime(s);
     await new Promise((r) => setTimeout(r, 0));
-    expect(FakeMutationObserver.last).not.toBeNull();
+    expect(FakeMutationObserver.structuralLast()).not.toBeNull();
   });
 
   it("writing-copy disabled does not activate it by itself", async () => {
@@ -152,7 +162,7 @@ describe("writing-copy runtime integration", () => {
     const s = makeSettings({ appearance: cloneDefaults().appearance, sidebar: { mode: "visible" }, writingCopy: { ...cloneDefaults().writingCopy, enabled: false, position: "middle-right", shortcutEnabled: true } });
     mod.syncRuntime(s);
     await new Promise((r) => setTimeout(r, 0));
-    expect(FakeMutationObserver.last).toBeNull();
+    expect(FakeMutationObserver.structuralLast()).toBeNull();
   });
 
   it("new Assistant block is discovered after mutation", async () => {
@@ -167,7 +177,7 @@ describe("writing-copy runtime integration", () => {
     nb.setAttribute("data-testid", "text-block");
     nb.innerHTML = "<p>Prose two.</p>";
     msg.appendChild(nb);
-    FakeMutationObserver.last!.trigger([nb]);
+    FakeMutationObserver.structuralLast()!.trigger([nb]);
     await flushDebounce();
     expect(mod.writingCopyController.candidates.length).toBeGreaterThanOrEqual(2);
   });
@@ -178,11 +188,11 @@ describe("writing-copy runtime integration", () => {
     mod.syncRuntime(s);
     await new Promise((r) => setTimeout(r, 0));
     const host = dom.window.document.querySelector('[data-cgl-writing-copy-host="true"]')!;
-    const before = FakeMutationObserver.last!;
+    const before = FakeMutationObserver.structuralLast()!;
     // Trigger a mutation with the host node; observer must ignore extension hosts.
-    FakeMutationObserver.last!.trigger([host]);
+    FakeMutationObserver.structuralLast()!.trigger([host]);
     await flushDebounce();
-    expect(FakeMutationObserver.last).toBe(before); // no new observer created
+    expect(FakeMutationObserver.structuralLast()).toBe(before); // no new observer created
   });
 
   it("disable writing-copy removes marker/host/shortcut/IO", async () => {

@@ -20,7 +20,7 @@ import {
   projectTokenFromLocation,
 } from "../features/writing-copy/block-identity.js";
 import { syncActiveChatRow } from "../features/appearance/active-chat-row.js";
-import { hydrateSidebarChatColors } from "../features/appearance/sidebar-chat-colors.js";
+import { requestSidebarChatColorHydration } from "../features/appearance/sidebar-chat-colors.js";
 import {
   CONVERSATION_APPEARANCE_PREFIX,
   CURRENT_CONVERSATION_KEY,
@@ -112,6 +112,81 @@ let observerEpoch = 0;
 let lastSettings: Settings | null = null;
 
 /**
+ * Set when a route change was detected; consumed once by the next
+ * syncRuntime so sidebar color hydration is labeled with its true trigger.
+ */
+let sidebarRoutePending = false;
+
+/** Consume a pending route trigger for sidebar hydration labeling. */
+function consumeSidebarRouteTrigger(): boolean {
+  const pending = sidebarRoutePending;
+  sidebarRoutePending = false;
+  return pending;
+}
+
+/** Sidebar conversation/project links that justify a color hydration. */
+const SIDEBAR_COLOR_LINK_SELECTOR = 'a[href*="/c/"], a[href*="/g/"]';
+
+/** Dedicated sidebar color observer (independent of the main observer). */
+let sidebarColorObserver: MutationObserver | null = null;
+
+/**
+ * Whether a mutation batch touched sidebar conversation/project structure.
+ * Pure added-node scan: conversation message churn never matches, so large
+ * WritingBlocks generate zero sidebar hydration work.
+ */
+function sidebarColorMutationRelevant(mutations: MutationRecord[]): boolean {
+  for (const m of mutations) {
+    for (const node of Array.from(m.addedNodes)) {
+      if (node.nodeType !== Node.ELEMENT_NODE) continue;
+      const el = node as Element;
+      if (typeof el.closest === "function" && el.closest("[data-cgl-xray-host]")) {
+        continue;
+      }
+      if (
+        typeof el.matches === "function" &&
+        el.matches(SIDEBAR_COLOR_LINK_SELECTOR)
+      ) {
+        return true;
+      }
+      if (
+        typeof el.querySelector === "function" &&
+        el.querySelector(SIDEBAR_COLOR_LINK_SELECTOR)
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/** Attach the dedicated sidebar color observer (idempotent). */
+function connectSidebarColorObserver(): void {
+  if (sidebarColorObserver || quiesced) return;
+  const obs = new MutationObserver((mutations) => {
+    if (!sidebarColorMutationRelevant(mutations)) return;
+    void requestSidebarChatColorHydration("sidebar-structure");
+  });
+  // Role tag: content tests fake MutationObserver with singleton `last`
+  // semantics; the tag lets fakes select the structural observer.
+  try {
+    (obs as unknown as Record<string, unknown>).cglSidebarColorObserver = true;
+  } catch {
+    /* tagging is best-effort only */
+  }
+  obs.observe(document.body, { childList: true, subtree: true });
+  sidebarColorObserver = obs;
+}
+
+/** Detach the dedicated sidebar color observer (idempotent). */
+function disconnectSidebarColorObserver(): void {
+  if (sidebarColorObserver) {
+    sidebarColorObserver.disconnect();
+    sidebarColorObserver = null;
+  }
+}
+
+/**
  * Last conversation/project fingerprints published to storage (change guards
  * — pointer writes happen at most once per route, never per refresh).
  */
@@ -178,18 +253,14 @@ const scheduleMarkerRefresh = debounce((): void => {
       sidebarController.refresh(settings);
       writingCopyController.refresh(settings);
       // Rebind the active sidebar row (rerenders replace rows); tint still
-      // gated on the per-chat override class. Persistent per-chat row
-      // colors rehydrate here too (rerender/scroll replacement coverage) —
-      // only while enabled, so OFF stays official.
+      // gated on the per-chat override class. NOTE: sidebar COLOR hydration
+      // is deliberately NOT here — conversation/message DOM churn must never
+      // trigger a full sidebar SHA/storage/layout pass (perf). Sidebar
+      // structural changes arrive through the dedicated sidebar observer.
       try {
         syncActiveChatRow(conversationTokenFromLocation());
       } catch {
         /* DOM lookup must never break the coalesced refresh */
-      }
-      if (settings.enabled) {
-        void hydrateSidebarChatColors().catch(() => {
-          /* best-effort paint; next refresh retries */
-        });
       }
     })
     .catch((err) => handleSettingsFailure(err, "scheduleMarkerRefresh"));
@@ -247,6 +318,14 @@ function syncRuntime(settings: Settings): void {
     disconnectObserver();
   }
 
+  // Dedicated sidebar color observer: lives exactly while the extension is
+  // enabled (independent of appearance-effect narrowing).
+  if (settings.enabled) {
+    connectSidebarColorObserver();
+  } else {
+    disconnectSidebarColorObserver();
+  }
+
   // Per-chat background: publish identity for the popup + apply any stored
   // override for this conversation (falls back cleanly when none exists).
   syncConversationAppearance(settings);
@@ -259,13 +338,11 @@ function syncRuntime(settings: Settings): void {
     /* DOM lookup must never break the sync apply */
   }
 
-  // Persistent per-chat sidebar colors rehydrate alongside (saved rows keep
-  // their label even while another conversation is open).
-  if (settings.enabled) {
-    void hydrateSidebarChatColors().catch(() => {
-      /* best-effort paint; next refresh retries */
-    });
-  }
+      if (settings.enabled) {
+        void requestSidebarChatColorHydration(
+          consumeSidebarRouteTrigger() ? "route" : "initial",
+        );
+      }
 
   lastSettings = settings;
 }
@@ -347,6 +424,7 @@ export function quiesceStaleRuntime(): void {
   }
   runtimeEnabled = false;
   disconnectObserver();
+  disconnectSidebarColorObserver();
   sidebarController.teardown();
   writingCopyController.teardown();
   applier.restore();
@@ -540,6 +618,7 @@ function teardown(): void {
   }
   runtimeEnabled = false;
   disconnectObserver();
+  disconnectSidebarColorObserver();
   preferBroadRoot = false;
   sidebarController.teardown();
   writingCopyController.teardown();
@@ -561,6 +640,9 @@ function reapplyAfterRouteChange(): void {
   // container. Narrowing adopts the new route's container on the next
   // structural batch and clears the guard.
   preferBroadRoot = true;
+  // The next syncRuntime labels its sidebar color hydration as a route
+  // trigger (true even if the async apply lands after more mutations).
+  sidebarRoutePending = true;
   if (
     lastSettings &&
     lastSettings.enabled &&
@@ -703,10 +785,9 @@ async function bootstrap(): Promise<void> {
             );
             await applier.reconcileConversationBackgroundOverride(fp, projFp, s);
             // A reset chat/project loses its sidebar color immediately;
-            // other saved rows persist (hydrate clears stale first).
-            await hydrateSidebarChatColors().catch(() => {
-              /* best-effort paint; next refresh retries */
-            });
+            // other saved rows persist (hydrate reconciles, never repaints
+            // unchanged rows).
+            await requestSidebarChatColorHydration("storage");
           })();
         }
         return;
