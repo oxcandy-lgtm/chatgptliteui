@@ -110,12 +110,15 @@
 }
 
 /* ---- active sidebar chat row (Phase 4) ---------------------------------
- * The selected conversation row shares the current per-chat background
+ * The selected conversation anchor shares the current per-chat background
  * exactly (same variable, no second preference, no opacity transform).
- * Text/icon colors stay ChatGPT-controlled; rounding untouched. Without a
+ * The official selected rounded paint lives on the clickable anchor, so
+ * the marker — and this override, strong enough to beat the official
+ * selected background — targets the anchor itself. Text/icon colors,
+ * radius, padding, height, and layout stay ChatGPT-controlled. Without a
  * per-chat override the class is absent and the official highlight shows. */
-:root.cgl-chat-bg-override [data-cgl-active-chat-row="true"] {
-  background-color: var(--cgl-conversation-bg);
+:root.cgl-chat-bg-override a[data-cgl-active-chat-row="true"] {
+  background-color: var(--cgl-conversation-bg) !important;
 }
 
 /* ---- sidebar visibility (Phase 3): guarded, marker-only, non-destructive ----

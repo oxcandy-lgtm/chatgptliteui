@@ -257,16 +257,6 @@ export class WritingCopyController {
    * Cleared on restore/teardown — never carried across conversations.
    */
   private lastProvenTarget: HTMLElement | null = null;
-  /**
-   * Known logical WritingBlock identities (`turnIndex:blockIndex`) for AUTO
-   * anchor decisions. Seeded with every safe identity on first stable
-   * detection; a later ACTIVE target with an unknown identity is a genuinely
-   * new WritingBlock (streaming DOM replacement keeps its identity, so it
-   * never re-triggers). Cleared on restore/teardown — never across routes.
-   * Content fingerprints are deliberately NOT used here: generated content
-   * changes while streaming.
-   */
-  private knownLogicalBlocks = new Set<string>();
   /** Whether apply() has started controller activity since construction. */
   private started = false;
   /** Safe-block count from the most recent detection pass. */
@@ -301,19 +291,6 @@ export class WritingCopyController {
     this.visuals = new WritingCopyVisualState(root);
 
     const onChange: ActiveTargetChange = (target) => {
-      if (target) {
-        // Genuinely new logical WritingBlock becoming active: drop ONLY the
-        // automatic anchor (no-op after a user drag) so the bubble takes a
-        // fresh normal position for it. Existing/scrolling targets keep the
-        // locked viewport position.
-        const key = this.logicalIdentityKey(target);
-        if (key !== null) {
-          if (!this.knownLogicalBlocks.has(key)) {
-            this.host.resetAutoAnchorForNewWritingBlock();
-          }
-          this.knownLogicalBlocks.add(key);
-        }
-      }
       this.activeBlock = target;
       this.syncHostToTarget();
       this.observeActiveTarget(target);
@@ -509,17 +486,6 @@ export class WritingCopyController {
     return this.tracker.recalculateNow();
   }
 
-  /** Logical block identity key (`turnIndex:blockIndex`), or null if invalid. */
-  private logicalIdentityKey(el: HTMLElement): string | null {
-    try {
-      const identity = deriveBlockIdentity(el, this.adapter);
-      if (identity.turnIndex < 0 || identity.blockIndex < 0) return null;
-      return `${identity.turnIndex}:${identity.blockIndex}`;
-    } catch {
-      return null;
-    }
-  }
-
   /** Mark all currently safe writing blocks with the extension marker. */
   private markSafeBlocks(): HTMLElement[] {
     const safe = findSafeWritingBlocks(this.adapter).filter((el) => el.isConnected);
@@ -542,13 +508,7 @@ export class WritingCopyController {
     // (clears stale surfaces from replaced DOM, then re-marks resolved
     // ones). Semantic identity stays on the editors; surfaces are paint.
     syncWritingBlockSurfaces(this.adapter, safe);
-    // First stable detection seeds every existing logical identity as
-    // known, so scrolling among pre-existing blocks never re-anchors.
-    if (this.knownLogicalBlocks.size === 0) {
-      for (const el of safe) {
-        const key = this.logicalIdentityKey(el);
-        if (key !== null) this.knownLogicalBlocks.add(key);
-      }
+  }
     }
     if (safe.length > 0) {
       this.tracker.refresh();
@@ -970,7 +930,6 @@ export class WritingCopyController {
     // Route/conversation boundary: a proven target must never survive into
     // another conversation (cross-conversation isolation).
     this.lastProvenTarget = null;
-    this.knownLogicalBlocks.clear();
     this.host.setVisible(false);
     this.host.setStatus("idle");
     this.host.unmount();

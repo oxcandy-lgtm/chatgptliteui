@@ -21,8 +21,10 @@ const SIDEBAR_SCOPE_SELECTOR =
   '[data-testid="sidebar"], nav[aria-label*="chat history" i]';
 
 /**
- * Mark the clickable row whose conversation route matches `token`.
- * Returns the marked row, or null when no token/row can be derived.
+ * Mark the current conversation anchor itself. The official selected rounded
+ * paint lives on the clickable <a>, so the marker goes on the anchor — never
+ * climbed to an li/parent (whose paint would miss the selected shape).
+ * Returns the marked anchor, or null when no token/anchor can be derived.
  * Clears any stale marker first (rebind-safe). Pure DOM marking.
  */
 export function syncActiveChatRow(token: string | null): HTMLElement | null {
@@ -55,20 +57,8 @@ export function syncActiveChatRow(token: string | null): HTMLElement | null {
   }
   if (!match) return null;
 
-  // Mark the clickable row/container — never the whole sidebar scope, a
-  // project folder/header, or anything outside the sidebar.
-  const sidebarRoot = scope ?? null;
-  let row: HTMLElement | null =
-    (match.closest("li") as HTMLElement | null) ??
-    (match.parentElement as HTMLElement | null);
-  if (!row || row === match) return null;
-  if (sidebarRoot && (row === sidebarRoot || !sidebarRoot.contains(row))) {
-    return null;
-  }
-  // Never climb into project folders/headers: keep the nearest row-level
-  // container, not an ancestor grouping several chats.
-  row.setAttribute(ACTIVE_CHAT_ROW_ATTR, "true");
-  return row;
+  match.setAttribute(ACTIVE_CHAT_ROW_ATTR, "true");
+  return match;
 }
 
 /** Remove every active-chat-row marker (disable/restore/teardown path). */

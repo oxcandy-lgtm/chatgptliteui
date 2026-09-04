@@ -219,17 +219,6 @@ export class WritingCopyHost {
   }
 
   /**
-   * Drop ONLY the automatic anchor so the next smart placement recomputes
-   * fresh (e.g. a genuinely new WritingBlock became active). No-op after a
-   * user drag — the dragged position stays authoritative. Never touches
-   * copied state, presentation state, or the manual offset itself.
-   */
-  resetAutoAnchorForNewWritingBlock(): void {
-    if (this.userPlaced) return;
-    this.lastFinal = null;
-  }
-
-  /**
    * Ensure exactly one Shadow DOM host exists. Reuses an existing host (never
    * duplicates). `onClick` is (re)bound idempotently.
    */
@@ -351,15 +340,12 @@ export class WritingCopyHost {
         top = rect.bottom - hostH;
         break;
       case "smart": {
-        // Deterministic upper-right anchor: a fixed row offset below the
-        // VISIBLE block top, independent of block height. For extremely tall
-        // blocks whose DOM top is far above the viewport, anchoring from
-        // rect.top would clamp to the browser edge; visibleTop keeps the
-        // bubble ~132px below the visible portion instead. The shared clamp
-        // below keeps the full circle onscreen; the manual drag offset
-        // (applied by the caller path) stays higher priority.
-        const visibleTop = Math.max(rect.top, 0);
-        top = visibleTop + INITIAL_ROW_OFFSET_PX;
+        // Fixed viewport slot: smart Y ignores WritingBlock document
+        // geometry entirely, so a block at any scroll position (above,
+        // inside, or below the viewport) yields the same bubble Y. The
+        // shared clamp below keeps the full circle onscreen; the manual
+        // drag offset (applied by the caller path) stays higher priority.
+        top = INITIAL_ROW_OFFSET_PX;
         break;
       }
       case "middle-right":
