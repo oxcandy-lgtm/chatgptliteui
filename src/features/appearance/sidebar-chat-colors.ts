@@ -266,7 +266,7 @@ function collectVisibleProjectFolders(): VisibleProjectFolder[] {
  * when no direct `/g/<id>` folder anchor exists. Fails closed (null) rather
  * than painting an oversized container or another project's rows.
  */
-function deriveProjectGroupHeader(
+export function deriveProjectGroupHeader(
   group: HTMLAnchorElement[],
   isForeignToken: (token: string) => boolean,
   isForeignProject: (projectId: string) => boolean,
@@ -311,8 +311,13 @@ function deriveProjectGroupHeader(
     // Chat rows contain their own conversation anchor: never a header.
     if (el.querySelector('a[href*="/c/"]')) continue;
     if (!hasVisibleRect(el)) continue;
-    // Must precede the first child row in DOM order.
-    if (!(el.compareDocumentPosition(first) & Node.DOCUMENT_POSITION_PRECEDING)) {
+    // Header must PRECEDE the first child: the child FOLLOWS the header.
+    if (
+      !(
+        el.compareDocumentPosition(first) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+      )
+    ) {
       continue;
     }
     const rect = el.getBoundingClientRect();
