@@ -166,11 +166,11 @@ export class WritingCopyTracker {
    *  2. greater visible area;
    *  3. DOM order (earlier in document wins).
    *
-   * Scroll-gap continuity: when no candidate is currently visible, the
-   * existing active target is retained while it stays in the candidate set
-   * and connected — the bubble must not vanish merely because scrolling
-   * passed through a gap. A newly visible candidate still wins normally;
-   * a disconnected/removed target still drops.
+   * Visibility gate: the bubble exists ONLY while at least one candidate
+   * intersects the viewport (even a 1px slice counts). When nothing is
+   * onscreen, active returns to null and the controller hides the host —
+   * position memory (lastFinal/manual offset) is owned by the host and
+   * survives the hide/show cycle.
    */
   private recalculate(): void {
     const vh = window.innerHeight || 0;
@@ -208,15 +208,6 @@ export class WritingCopyTracker {
         bestArea = area;
         bestOrder = domOrder(el, connected);
       }
-    }
-
-    if (
-      best === null &&
-      this.active &&
-      this.active.isConnected &&
-      this.candidates.has(this.active)
-    ) {
-      best = this.active;
     }
 
     if (best !== this.active) {

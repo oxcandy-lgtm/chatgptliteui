@@ -256,8 +256,6 @@ export class WritingCopyController {
    * Cleared on restore/teardown — never carried across conversations.
    */
   private lastProvenTarget: HTMLElement | null = null;
-  /** True while tracking runs on a retained (detection-missed) target. */
-  private continuityActive = false;
   /** Whether apply() has started controller activity since construction. */
   private started = false;
   /** Safe-block count from the most recent detection pass. */
@@ -506,7 +504,6 @@ export class WritingCopyController {
   private updateTracking(): void {
     const safe = this.markSafeBlocks();
     if (safe.length > 0) {
-      this.continuityActive = false;
       this.tracker.refresh();
       const tracked = this.tracker.candidatesList;
       this.lastProvenTarget =
@@ -517,42 +514,12 @@ export class WritingCopyController {
       this.lastProvenTarget &&
       isContinuityTargetValid(this.lastProvenTarget, this.adapter)
     ) {
-      this.continuityActive = true;
       this.tracker.refresh([this.lastProvenTarget]);
     } else {
       this.lastProvenTarget = null;
-      this.continuityActive = false;
       this.tracker.refresh();
     }
     this.syncHostToTarget();
-  }
-
-  /**
-   * Retain the bubble when no block can currently anchor it: continuity mode
-   * with a still-valid retained target, or a tracked target temporarily
-   * crushed to zero size by responsive reflow. Returns the target to retain,
-   * or null when the host should hide (e.g. everything merely offscreen).
-   */
-  private retentionTarget(): HTMLElement | null {
-    if (!this.enabled) return null;
-    if (this.continuityActive) {
-      const retained = this.lastProvenTarget;
-      if (
-        retained &&
-        retained.isConnected &&
-        isContinuityTargetValid(retained, this.adapter)
-      ) {
-        return retained;
-      }
-      this.continuityActive = false;
-      return null;
-    }
-    for (const el of this.tracker.candidatesList) {
-      if (!el.isConnected || !isContinuityTargetValid(el, this.adapter)) continue;
-      const r = el.getBoundingClientRect();
-      if (r.width <= 0 || r.height <= 0) return el;
-    }
-    return null;
   }
 
   /**
@@ -594,9 +561,8 @@ export class WritingCopyController {
   /** Show/hide + position the host against the active block. */
   private syncHostToTarget(): void {
     if (!this.enabled || !this.activeBlock || !this.activeBlock.isConnected) {
-      // No anchorable block: retain the last bubble position for a
-      // still-valid continuity/crushed target instead of vanishing.
-      if (this.retentionTarget() && this.host.retainLastPosition()) return;
+      // Visibility gate: no onscreen active block means no bubble. Position
+      // memory (host lastFinal/manual offset) survives the hide/show cycle.
       this.host.setVisible(false);
       this.host.setStatus("none");
       return;
@@ -715,8 +681,7 @@ export class WritingCopyController {
     this.geometryRaf = raf(() => {
       this.geometryRaf = null;
       if (!this.enabled || !this.activeBlock || !this.activeBlock.isConnected) {
-        if (this.retentionTarget()) this.host.retainLastPosition();
-        else this.host.setVisible(false);
+        this.host.setVisible(false);
         return;
       }
       this.host.positionAgainst(this.activeBlock, this.position);
@@ -958,7 +923,6 @@ export class WritingCopyController {
     // Route/conversation boundary: a proven target must never survive into
     // another conversation (cross-conversation isolation).
     this.lastProvenTarget = null;
-    this.continuityActive = false;
     this.host.setVisible(false);
     this.host.setStatus("idle");
     this.host.unmount();

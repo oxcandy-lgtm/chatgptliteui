@@ -298,10 +298,9 @@ export class WritingCopyHost {
     if (!this.host) return;
     const rect = block.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) {
-      // Temporarily unmeasurable target (responsive reflow crush): keep the
-      // last valid bubble position instead of vanishing; the next normal
-      // recalculation resumes once geometry returns.
-      if (!this.retainLastPosition()) this.setVisible(false);
+      // Zero-size geometry is not visibly onscreen: hide, but preserve
+      // lastFinal/manual position so recovery restores the locked spot.
+      this.setVisible(false);
       return;
     }
     const hostRect = this.host.getBoundingClientRect();
