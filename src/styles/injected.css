@@ -139,20 +139,55 @@
  * Only UNCOPIED WritingBlocks that are CURRENTLY VISIBLE (extension-owned
  * `data-cgl-writing-visible` marker from the shared IntersectionObserver)
  * animate. COPIED blocks never pulse. One animation, no per-block timers,
- * no JS loop. */
-:root.cgl-writing-pulse-on [data-cgl-writing-block][data-cgl-writing-copy-state="uncopied"][data-cgl-writing-visible] {
+ * no JS loop.
+ * Fallback scope: editors already covered by a resolved whole-card surface
+ * are excluded here (the surface overlay below owns ALL pulse paint, so the
+ * editor area never receives a double layer). */
+:root.cgl-writing-pulse-on [data-cgl-writing-block][data-cgl-writing-copy-state="uncopied"][data-cgl-writing-visible]:not([data-cgl-writing-surface] *) {
   animation: cgl-writing-pulse var(--cgl-pulse-period) ease-in-out infinite;
 }
 
-/* ---- whole-card surface pulse (Phase 4) --------------------------------
+/* ---- whole-card surface pulse (Phase 4): SINGLE uniform layer ---------
  * The uncopied pulse paints the resolved whole WritingBlock card (header +
- * editor background), driven purely by the editor's existing semantic state
- * and visibility markers via :has() — no extra JS state, no timers. COPIED
- * editors never match, so the card pulse stops on copy; offscreen editors
- * lose their visible marker, so no pulse work happens offscreen. The editor
- * rule above is kept as fallback for blocks whose surface fails closed. */
+ * editor background) as ONE layer through a surface ::after overlay, driven
+ * purely by the editor's existing semantic state and visibility markers via
+ * :has() — no extra JS state, no timers, no wrapper nodes, no content edits.
+ * A plain background-color on the surface would be masked by opaque ChatGPT
+ * descendant backgrounds (header/tool area); the overlay sits above card
+ * descendants (pointer-events:none, so Edit/Copy/expand stay interactive)
+ * while staying below real popups. Opacity animates 0 -> 1 -> 0, so the
+ * underlying configured background is never destroyed.
+ * COPIED editors never match :has(), so the overlay stops on copy;
+ * offscreen editors lose their visible marker, so no pulse work happens
+ * offscreen. The editor rule above is the fail-closed fallback for blocks
+ * whose surface could not be resolved. */
 :root.cgl-writing-pulse-on [data-cgl-writing-surface]:has([data-cgl-writing-block][data-cgl-writing-copy-state="uncopied"][data-cgl-writing-visible]) {
-  animation: cgl-writing-pulse var(--cgl-pulse-period) ease-in-out infinite;
+  position: relative;
+}
+
+:root.cgl-writing-pulse-on [data-cgl-writing-surface]:has([data-cgl-writing-block][data-cgl-writing-copy-state="uncopied"][data-cgl-writing-visible])::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 1;
+  background-color: color-mix(
+    in srgb,
+    var(--cgl-pulse-color) calc(var(--cgl-pulse-intensity) * 100%),
+    transparent
+  );
+  animation: cgl-surface-pulse var(--cgl-pulse-period) ease-in-out infinite;
+}
+
+@keyframes cgl-surface-pulse {
+  0%,
+  100% {
+    opacity: 0;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 
 @keyframes cgl-writing-pulse {
@@ -178,8 +213,8 @@
  * Honors BOTH ChatGPTLiteUI's own animation-reduction toggle and the OS-level
  * preference. The pulse stops and UNCOPIED blocks keep a static tint instead;
  * the copied marker itself is static and remains untouched by these rules. */
-:root.cgl-no-anim.cgl-writing-pulse-on [data-cgl-writing-block][data-cgl-writing-copy-state="uncopied"],
-:root.cgl-no-anim.cgl-writing-pulse-on [data-cgl-writing-block][data-cgl-writing-copy-state="uncopied"][data-cgl-writing-visible] {
+:root.cgl-no-anim.cgl-writing-pulse-on [data-cgl-writing-block][data-cgl-writing-copy-state="uncopied"]:not([data-cgl-writing-surface] *),
+:root.cgl-no-anim.cgl-writing-pulse-on [data-cgl-writing-block][data-cgl-writing-copy-state="uncopied"][data-cgl-writing-visible]:not([data-cgl-writing-surface] *) {
   animation: none !important;
   background-color: color-mix(
     in srgb,
@@ -190,16 +225,28 @@
 
 :root.cgl-no-anim.cgl-writing-pulse-on [data-cgl-writing-surface]:has([data-cgl-writing-block][data-cgl-writing-copy-state="uncopied"]),
 :root.cgl-no-anim.cgl-writing-pulse-on [data-cgl-writing-surface]:has([data-cgl-writing-block][data-cgl-writing-copy-state="uncopied"][data-cgl-writing-visible]) {
-  animation: none !important;
+  position: relative;
+}
+
+:root.cgl-no-anim.cgl-writing-pulse-on [data-cgl-writing-surface]:has([data-cgl-writing-block][data-cgl-writing-copy-state="uncopied"])::after,
+:root.cgl-no-anim.cgl-writing-pulse-on [data-cgl-writing-surface]:has([data-cgl-writing-block][data-cgl-writing-copy-state="uncopied"][data-cgl-writing-visible])::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 1;
   background-color: color-mix(
     in srgb,
-    var(--cgl-pulse-color) calc(var(--cgl-pulse-intensity) * 50%),
+    var(--cgl-pulse-color) calc(var(--cgl-pulse-intensity) * 100%),
     transparent
   );
+  opacity: 0.5;
+  animation: none !important;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  :root.cgl-writing-pulse-on [data-cgl-writing-block][data-cgl-writing-copy-state="uncopied"] {
+  :root.cgl-writing-pulse-on [data-cgl-writing-block][data-cgl-writing-copy-state="uncopied"]:not([data-cgl-writing-surface] *) {
     animation: none !important;
     background-color: color-mix(
       in srgb,
@@ -208,12 +255,22 @@
     );
   }
   :root.cgl-writing-pulse-on [data-cgl-writing-surface]:has([data-cgl-writing-block][data-cgl-writing-copy-state="uncopied"]) {
-    animation: none !important;
+    position: relative;
+  }
+  :root.cgl-writing-pulse-on [data-cgl-writing-surface]:has([data-cgl-writing-block][data-cgl-writing-copy-state="uncopied"])::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    z-index: 1;
     background-color: color-mix(
       in srgb,
-      var(--cgl-pulse-color) calc(var(--cgl-pulse-intensity) * 50%),
+      var(--cgl-pulse-color) calc(var(--cgl-pulse-intensity) * 100%),
       transparent
     );
+    opacity: 0.5;
+    animation: none !important;
   }
 }
 
