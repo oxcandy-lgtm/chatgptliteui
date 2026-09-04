@@ -211,11 +211,12 @@ describe("draggable copy bubble", () => {
     handle.dispatchEvent(pointerEvent(dom, "pointerup", 540, 530));
     expect(host.dragOffset).toEqual({ x: 40, y: 30 });
 
-    // A second block: smart base = right+6 / fixed row offset, offset reapplied.
+    // Viewport position lock: a later smart call against another block does
+    // NOT re-anchor — the locked position and the manual offset both survive.
     host.positionAgainst(blockWith({ top: 400, left: 200, width: 400, height: 200 }, dom), "smart");
     const el = dom.window.document.querySelector('[data-cgl-writing-copy-host="true"]') as HTMLElement;
-    expect(el.style.left).toBe(`${600 + 6 + 40}px`);
-    expect(el.style.top).toBe(`${400 + 132 + 30}px`);
+    expect(el.style.left).toBe(`${300 + 6 + 40}px`);
+    expect(el.style.top).toBe(`${100 + 132 + 30}px`);
     expect(host.dragOffset).toEqual({ x: 40, y: 30 });
   });
 

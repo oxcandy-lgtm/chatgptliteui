@@ -17,6 +17,7 @@ import { WRITING_COPY_ROOT_CLASSES } from "./writing-copy-state.js";
 import { saveCopiedRecord, getCopiedRecords } from "./copied-state-store.js";
 import { fingerprintText } from "./content-fingerprint.js";
 import { extractBlockText } from "./copy-action.js";
+import { syncWritingBlockSurfaces } from "./writing-copy-surface.js";
 import {
   deriveBlockIdentity,
   conversationFingerprintFromLocation,
@@ -503,6 +504,10 @@ export class WritingCopyController {
    */
   private updateTracking(): void {
     const safe = this.markSafeBlocks();
+    // Rebind whole-card visual surfaces for the current safe editors
+    // (clears stale surfaces from replaced DOM, then re-marks resolved
+    // ones). Semantic identity stays on the editors; surfaces are paint.
+    syncWritingBlockSurfaces(this.adapter, safe);
     if (safe.length > 0) {
       this.tracker.refresh();
       const tracked = this.tracker.candidatesList;

@@ -114,6 +114,14 @@
   background-color: var(--cgl-writing-bg);
 }
 
+/* The resolved whole-card surface shares the optional static background so
+ * the card reads as one surface whether or not the pulse is running. When
+ * the background setting is off the variable is unset and this rule paints
+ * nothing. */
+:root.cgl-writing-copy-active [data-cgl-writing-surface] {
+  background-color: var(--cgl-writing-bg);
+}
+
 /* ---- copied text marker (Phase 4): CSS Custom Highlight API --------------
  * `::highlight(cgl-copied)` paints the live Ranges of currently COPIED
  * WritingBlocks. No spans are created and no ChatGPT DOM is rewritten.
@@ -136,10 +144,21 @@
   animation: cgl-writing-pulse var(--cgl-pulse-period) ease-in-out infinite;
 }
 
+/* ---- whole-card surface pulse (Phase 4) --------------------------------
+ * The uncopied pulse paints the resolved whole WritingBlock card (header +
+ * editor background), driven purely by the editor's existing semantic state
+ * and visibility markers via :has() — no extra JS state, no timers. COPIED
+ * editors never match, so the card pulse stops on copy; offscreen editors
+ * lose their visible marker, so no pulse work happens offscreen. The editor
+ * rule above is kept as fallback for blocks whose surface fails closed. */
+:root.cgl-writing-pulse-on [data-cgl-writing-surface]:has([data-cgl-writing-block][data-cgl-writing-copy-state="uncopied"][data-cgl-writing-visible]) {
+  animation: cgl-writing-pulse var(--cgl-pulse-period) ease-in-out infinite;
+}
+
 @keyframes cgl-writing-pulse {
   0%,
   100% {
-    background-color: transparent;
+    background-color: var(--cgl-writing-bg, transparent);
   }
   50% {
     background-color: color-mix(
@@ -169,8 +188,26 @@
   );
 }
 
+:root.cgl-no-anim.cgl-writing-pulse-on [data-cgl-writing-surface]:has([data-cgl-writing-block][data-cgl-writing-copy-state="uncopied"]),
+:root.cgl-no-anim.cgl-writing-pulse-on [data-cgl-writing-surface]:has([data-cgl-writing-block][data-cgl-writing-copy-state="uncopied"][data-cgl-writing-visible]) {
+  animation: none !important;
+  background-color: color-mix(
+    in srgb,
+    var(--cgl-pulse-color) calc(var(--cgl-pulse-intensity) * 50%),
+    transparent
+  );
+}
+
 @media (prefers-reduced-motion: reduce) {
   :root.cgl-writing-pulse-on [data-cgl-writing-block][data-cgl-writing-copy-state="uncopied"] {
+    animation: none !important;
+    background-color: color-mix(
+      in srgb,
+      var(--cgl-pulse-color) calc(var(--cgl-pulse-intensity) * 50%),
+      transparent
+    );
+  }
+  :root.cgl-writing-pulse-on [data-cgl-writing-surface]:has([data-cgl-writing-block][data-cgl-writing-copy-state="uncopied"]) {
     animation: none !important;
     background-color: color-mix(
       in srgb,

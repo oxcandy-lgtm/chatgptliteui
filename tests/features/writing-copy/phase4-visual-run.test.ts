@@ -384,9 +384,19 @@ describe("Phase 4 visual + smart UI — authoritative RUN", () => {
 
   it("Step 6: smart positioning geometry cases keep exactly one host", () => {
     installDom("https://chatgpt.com/c/conv-pos", PAGE(TEXT_A, TEXT_B));
-    const host = new WritingCopyHost();
+    // Viewport position lock: each smart base is computed on FIRST placement
+    // only, so every geometry case below uses a fresh host (fresh lock).
+    let host = new WritingCopyHost();
     host.mount(() => {});
-    const hostEl = dom.window.document.querySelector(
+    const freshHost = (): HTMLElement => {
+      host.unmount();
+      host = new WritingCopyHost();
+      host.mount(() => {});
+      return dom.window.document.querySelector(
+        '[data-cgl-writing-copy-host="true"]',
+      ) as HTMLElement;
+    };
+    let hostEl = dom.window.document.querySelector(
       '[data-cgl-writing-copy-host="true"]',
     ) as HTMLElement;
 
@@ -415,6 +425,7 @@ describe("Phase 4 visual + smart UI — authoritative RUN", () => {
     // 2. insufficient right room -> inside-right fallback
     // rect.right 300 + margin 6 + bubble 44 = 350 > vw(340) - margin 6.
     Object.defineProperty(dom.window, "innerWidth", { value: 340, configurable: true });
+    hostEl = freshHost();
     host.positionAgainst(roomy, "smart");
     const leftInside = parseInt(hostEl.style.left, 10);
     expect(leftInside).toBeLessThan(leftOutside);
@@ -422,6 +433,7 @@ describe("Phase 4 visual + smart UI — authoritative RUN", () => {
     // 3. narrow viewport -> completely clamped inside visible bounds
     Object.defineProperty(dom.window, "innerWidth", { value: 200, configurable: true });
     Object.defineProperty(dom.window, "innerHeight", { value: 300, configurable: true });
+    hostEl = freshHost();
     host.positionAgainst(roomy, "smart");
     const l = parseInt(hostEl.style.left, 10);
     const t = parseInt(hostEl.style.top, 10);
@@ -433,6 +445,7 @@ describe("Phase 4 visual + smart UI — authoritative RUN", () => {
     // 4. tall block partly offscreen -> button stays visible (Y clamped)
     Object.defineProperty(dom.window, "innerWidth", { value: 1200, configurable: true });
     const tall = makeBlock({ top: -5000, bottom: 5000, height: 10000, left: 0, right: 300, width: 300 });
+    hostEl = freshHost();
     host.positionAgainst(tall, "smart");
     const tTall = parseInt(hostEl.style.top, 10);
     expect(tTall).toBeGreaterThanOrEqual(6);
@@ -443,6 +456,7 @@ describe("Phase 4 visual + smart UI — authoritative RUN", () => {
       dom.window.document.querySelectorAll('[data-cgl-writing-copy-host="true"]').length,
     ).toBe(1);
     const wide = makeBlock({ top: 50, bottom: 250, left: 100, right: 900, width: 800, height: 200 });
+    hostEl = freshHost();
     host.positionAgainst(wide, "smart");
     expect(parseInt(hostEl.style.left, 10)).toBe(906); // 900 + margin
     expect(vw()).toBeGreaterThan(0);

@@ -1,18 +1,23 @@
 /**
  * Extension-owned writing-block markers.
  *
- * Exactly TWO extension-owned attribute mutations are permitted on a detected
- * ChatGPT writing block, and nothing else:
+ * Exactly THREE extension-owned attribute mutations are permitted on ChatGPT
+ * content, and nothing else:
  *
- *   data-cgl-writing-block="true"
+ *   data-cgl-writing-block="true"             (canonical safe editor)
  *
- *   data-cgl-writing-copy-state="copied" | "uncopied"
+ *   data-cgl-writing-copy-state="copied" | "uncopied"   (semantic state)
+ *
+ *   data-cgl-writing-surface="true"           (whole-card visual surface:
+ *     deepest safe container pairing the editor with its exact header
+ *     anchor; visual pulse paint only, never semantic identity)
  *
  * No classes, inline styles, aria, ids, roles, or structure are ever modified.
  * The boolean marker identifies the safe block so guarded CSS can apply the
  * optional writing-block background under the `cgl-writing-copy-active` root
  * class. The semantic state marker carries the runtime copied/uncopied claim.
- * BOTH markers are extension-owned and BOTH are removed by
+ * The surface marker lets the uncopied pulse paint the whole visible card.
+ * ALL markers are extension-owned and ALL are removed by
  * `clearAllWritingCopyMarkers()` on restore/route teardown/disable.
  */
 
@@ -22,11 +27,15 @@ export const MARKER_WRITING_BLOCK = "data-cgl-writing-block";
 /** Attribute carrying the semantic copied/uncopied state of a block. */
 export const MARKER_WRITING_COPY_STATE = "data-cgl-writing-copy-state";
 
+/** Attribute marking the resolved whole-card visual surface of a block. */
+export const MARKER_WRITING_SURFACE = "data-cgl-writing-surface";
+
 export type WritingCopySemanticState = "copied" | "uncopied";
 
 const ALL_WRITING_COPY_MARKERS = [
   MARKER_WRITING_BLOCK,
   MARKER_WRITING_COPY_STATE,
+  MARKER_WRITING_SURFACE,
 ] as const;
 
 /** All extension-owned writing-copy marker attribute names. */
