@@ -163,6 +163,8 @@ export class WritingCopyHost {
 
   /** Session-local manual viewport offset (smart position + offset = final). */
   private manualOffset: { x: number; y: number } = { x: 0, y: 0 };
+  /** Last successfully applied final position (zero-size continuity). */
+  private lastFinal: { top: number; left: number } | null = null;
   /** Last smart (pre-offset) position, so drags rebase cleanly. */
   private smartBase: { top: number; left: number } | null = null;
 
@@ -296,7 +298,10 @@ export class WritingCopyHost {
     if (!this.host) return;
     const rect = block.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) {
-      this.setVisible(false);
+      // Temporarily unmeasurable target (responsive reflow crush): keep the
+      // last valid bubble position instead of vanishing; the next normal
+      // recalculation resumes once geometry returns.
+      if (!this.retainLastPosition()) this.setVisible(false);
       return;
     }
     const hostRect = this.host.getBoundingClientRect();
@@ -346,6 +351,7 @@ export class WritingCopyHost {
     // the FINAL circle fully inside the viewport.
     this.smartBase = { top, left };
     const final = this.clampFinal(top + this.manualOffset.y, left + this.manualOffset.x, hostW, hostH, margin, vw, vh);
+    this.lastFinal = final;
 
     this.host.style.top = `${Math.round(final.top)}px`;
     this.host.style.left = `${Math.round(final.left)}px`;
@@ -416,6 +422,7 @@ export class WritingCopyHost {
       x: final.left - this.smartBase.left,
       y: final.top - this.smartBase.top,
     };
+    this.lastFinal = final;
     this.host.style.top = `${Math.round(final.top)}px`;
     this.host.style.left = `${Math.round(final.left)}px`;
   }
@@ -429,6 +436,31 @@ export class WritingCopyHost {
       left: Math.max(margin, Math.min(left, vw - hostW - margin)),
       top: Math.max(margin, Math.min(top, vh - hostH - margin)),
     };
+  }
+
+  /**
+   * Keep the bubble visible at its last valid position, re-clamped into the
+   * CURRENT viewport. Used when a still-valid target temporarily loses
+   * measurable geometry (or anchoring) during responsive reflow. Returns
+   * false when no valid position was ever applied (caller then hides).
+   * The remembered position is preserved (not overwritten) so geometry
+   * recovery resumes exactly where the bubble was.
+   */
+  retainLastPosition(): boolean {
+    if (!this.host || !this.lastFinal) return false;
+    const hostRect = this.host.getBoundingClientRect();
+    const hostW = hostRect.width || COPY_BUBBLE_PX;
+    const hostH = hostRect.height || COPY_BUBBLE_PX;
+    const margin = 6;
+    const { vw, vh } = viewportSize();
+    const final = this.clampFinal(
+      this.lastFinal.top, this.lastFinal.left,
+      hostW, hostH, margin, vw, vh,
+    );
+    this.host.style.top = `${Math.round(final.top)}px`;
+    this.host.style.left = `${Math.round(final.left)}px`;
+    this.setVisible(true);
+    return true;
   }
 
   /** Detach drag listeners, release capture, clear drag state (offset kept). */
@@ -547,6 +579,7 @@ export class WritingCopyHost {
     this.onClick = null;
     this.manualOffset = { x: 0, y: 0 };
     this.smartBase = null;
+    this.lastFinal = null;
   }
 }
 

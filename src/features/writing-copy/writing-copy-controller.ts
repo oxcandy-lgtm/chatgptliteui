@@ -54,6 +54,53 @@ import { WritingCopyVisualState } from "./writing-copy-visual-state.js";
 
 export const WRITING_COPY_HOST_ATTR = HOST_ATTR;
 
+/** Extension-owned hosts the continuity check must never treat as content. */
+const CONTINUITY_HOST_SELECTOR =
+  '[data-cgl-sidebar-host="true"], [data-cgl-writing-copy-host="true"], #cgl-sidebar-control-host';
+
+/**
+ * Narrow-viewport continuity validation for a previously proven target.
+ * Continuation, not new detection: the element must still be the same
+ * connected editor inside exactly one Assistant turn of the current
+ * conversation, outside every forbidden surface. The header anchor is
+ * deliberately NOT required — responsive layouts may hide it after the
+ * target was proven. Generic contenteditable elements can never enter
+ * through this path (only the previously proven target is eligible).
+ */
+function isContinuityTargetValid(
+  el: HTMLElement,
+  adapter: ChatGptAdapter,
+): boolean {
+  if (!el.isConnected) return false;
+  const tag = el.tagName.toLowerCase();
+  if (tag === "pre" || tag === "code" || tag === "button") return false;
+  if (el.matches('button, [role="button"]')) return false;
+  const container = adapter.detectConversationContainer().element;
+  if (!container || !container.contains(el)) return false;
+  const turns = Array.from(
+    container.querySelectorAll(
+      '[data-message-author-role="assistant"], [data-testid="assistant-message"]',
+    ),
+  );
+  if (turns.filter((t) => t.contains(el)).length !== 1) return false;
+  if (el.closest('[role="dialog"], dialog, [aria-modal="true"]')) return false;
+  if (el.closest('[data-testid="sidebar"], nav[aria-label*="chat history" i]')) {
+    return false;
+  }
+  if (el.closest(CONTINUITY_HOST_SELECTOR)) return false;
+  if (el.closest('[role="textbox"], textarea, input') && el.getAttribute("contenteditable") !== "true") {
+    return false;
+  }
+  const composer = adapter.detectComposer().element;
+  if (
+    composer &&
+    (el === composer || el.contains(composer) || composer.contains(el))
+  ) {
+    return false;
+  }
+  return true;
+}
+
 /** Serializable controller receipt for the X-Ray AI report (no text/DOM). */
 export interface WritingCopyControllerReceipt {
   controllerStarted: boolean;
@@ -201,6 +248,16 @@ export class WritingCopyController {
   private enabled = false;
   private position: CopyPosition = "smart";
   private activeBlock: HTMLElement | null = null;
+  /**
+   * Narrow-viewport continuity: the most recently proven tracking target.
+   * When fresh detection returns zero during a same-conversation
+   * responsive/layout change, this target is re-validated (connected, same
+   * turn, outside forbidden UI) and retained so the Copy bubble survives.
+   * Cleared on restore/teardown — never carried across conversations.
+   */
+  private lastProvenTarget: HTMLElement | null = null;
+  /** True while tracking runs on a retained (detection-missed) target. */
+  private continuityActive = false;
   /** Whether apply() has started controller activity since construction. */
   private started = false;
   /** Safe-block count from the most recent detection pass. */
@@ -306,8 +363,7 @@ export class WritingCopyController {
     // ONE shared activation path with refresh(): host mount + geometry
     // listeners are idempotent, so apply and refresh can never diverge again.
     this.ensureOperationalSurface();
-    this.tracker.refresh();
-    this.syncHostToTarget();
+    this.updateTracking();
     void this.hydrateState().then(() => this.reconcileVisuals());
   }
 
@@ -329,8 +385,7 @@ export class WritingCopyController {
     this.visuals.applyPresentation(settings);
     this.applyBackground(settings);
     this.ensureOperationalSurface();
-    this.tracker.refresh();
-    this.syncHostToTarget();
+    this.updateTracking();
     void this.hydrateState().then(() => this.reconcileVisuals());
   }
 
@@ -433,12 +488,71 @@ export class WritingCopyController {
   }
 
   /** Mark all currently safe writing blocks with the extension marker. */
-  private markSafeBlocks(): void {
+  private markSafeBlocks(): HTMLElement[] {
     const safe = findSafeWritingBlocks(this.adapter).filter((el) => el.isConnected);
     this.lastDetectedSafeCount = safe.length;
     for (const el of safe) {
       markWritingBlock(el);
     }
+    return safe;
+  }
+
+  /**
+   * Detect, track, and sync the host in one step, with narrow-viewport
+   * continuity: fresh detection wins whenever non-empty (and refreshes the
+   * proven target); when it returns zero, the previously proven target is
+   * re-validated and retained instead of dropping the Copy bubble.
+   */
+  private updateTracking(): void {
+    const safe = this.markSafeBlocks();
+    if (safe.length > 0) {
+      this.continuityActive = false;
+      this.tracker.refresh();
+      const tracked = this.tracker.candidatesList;
+      this.lastProvenTarget =
+        (this.activeBlock && tracked.includes(this.activeBlock)
+          ? this.activeBlock
+          : tracked[0]) ?? null;
+    } else if (
+      this.lastProvenTarget &&
+      isContinuityTargetValid(this.lastProvenTarget, this.adapter)
+    ) {
+      this.continuityActive = true;
+      this.tracker.refresh([this.lastProvenTarget]);
+    } else {
+      this.lastProvenTarget = null;
+      this.continuityActive = false;
+      this.tracker.refresh();
+    }
+    this.syncHostToTarget();
+  }
+
+  /**
+   * Retain the bubble when no block can currently anchor it: continuity mode
+   * with a still-valid retained target, or a tracked target temporarily
+   * crushed to zero size by responsive reflow. Returns the target to retain,
+   * or null when the host should hide (e.g. everything merely offscreen).
+   */
+  private retentionTarget(): HTMLElement | null {
+    if (!this.enabled) return null;
+    if (this.continuityActive) {
+      const retained = this.lastProvenTarget;
+      if (
+        retained &&
+        retained.isConnected &&
+        isContinuityTargetValid(retained, this.adapter)
+      ) {
+        return retained;
+      }
+      this.continuityActive = false;
+      return null;
+    }
+    for (const el of this.tracker.candidatesList) {
+      if (!el.isConnected || !isContinuityTargetValid(el, this.adapter)) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width <= 0 || r.height <= 0) return el;
+    }
+    return null;
   }
 
   /**
@@ -480,6 +594,9 @@ export class WritingCopyController {
   /** Show/hide + position the host against the active block. */
   private syncHostToTarget(): void {
     if (!this.enabled || !this.activeBlock || !this.activeBlock.isConnected) {
+      // No anchorable block: retain the last bubble position for a
+      // still-valid continuity/crushed target instead of vanishing.
+      if (this.retentionTarget() && this.host.retainLastPosition()) return;
       this.host.setVisible(false);
       this.host.setStatus("none");
       return;
@@ -598,7 +715,8 @@ export class WritingCopyController {
     this.geometryRaf = raf(() => {
       this.geometryRaf = null;
       if (!this.enabled || !this.activeBlock || !this.activeBlock.isConnected) {
-        this.host.setVisible(false);
+        if (this.retentionTarget()) this.host.retainLastPosition();
+        else this.host.setVisible(false);
         return;
       }
       this.host.positionAgainst(this.activeBlock, this.position);
@@ -837,6 +955,10 @@ export class WritingCopyController {
     this.activeResizeObserver = null;
     this.observedActive = null;
     this.activeBlock = null;
+    // Route/conversation boundary: a proven target must never survive into
+    // another conversation (cross-conversation isolation).
+    this.lastProvenTarget = null;
+    this.continuityActive = false;
     this.host.setVisible(false);
     this.host.setStatus("idle");
     this.host.unmount();

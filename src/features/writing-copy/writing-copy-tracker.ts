@@ -90,8 +90,14 @@ export class WritingCopyTracker {
   /**
    * Re-scan the DOM for safe candidates, rebuild the candidate set, (re)attach
    * the IntersectionObserver, and immediately recalculate the active target.
+   *
+   * `retainedFallback` covers responsive/layout continuity: when fresh
+   * detection legitimately returns zero (e.g. a responsive-hidden header
+   * anchor) the controller may pass its previously proven, re-validated
+   * target so tracking — and the Copy bubble — survive the reflow. The
+   * fallback is used ONLY when fresh detection finds nothing.
    */
-  refresh(): void {
+  refresh(retainedFallback?: HTMLElement[]): void {
     this.teardownObserver();
     // Clear stale visibility markers before rebuilding the candidate set.
     document.querySelectorAll(`[${MARKER_WRITING_VISIBLE}]`).forEach((el) => {
@@ -100,7 +106,11 @@ export class WritingCopyTracker {
     const found = findSafeWritingBlocks(this.adapter).filter(
       (el) => el.isConnected,
     );
-    this.candidates = new Set(found);
+    this.candidates = new Set(
+      found.length > 0
+        ? found
+        : (retainedFallback ?? []).filter((el) => el.isConnected),
+    );
 
     if (typeof IntersectionObserver !== "undefined" && this.candidates.size > 0) {
       this.observer = new IntersectionObserver(
