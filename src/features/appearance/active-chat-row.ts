@@ -22,6 +22,17 @@
 
 export const ACTIVE_CHAT_ROW_ATTR = "data-cgl-active-chat-row";
 
+/**
+ * Bounded row surface carrying the force-paint. Derived from the winning
+ * anchor (never climbed blindly into project/section/nav containers).
+ */
+export const ACTIVE_CHAT_SURFACE_ATTR = "data-cgl-active-chat-surface";
+
+/** Sidebar row geometry bounds (approximate, fail-closed when exceeded). */
+const ROW_MIN_HEIGHT_PX = 24;
+const ROW_MAX_HEIGHT_PX = 72;
+const ROW_MAX_WIDTH_PX = 420;
+
 /** Maximum left edge for the preferred left-sidebar zone. */
 const SIDEBAR_ZONE_PX = 420;
 
@@ -38,14 +49,17 @@ function isCandidateVisible(a: HTMLElement): boolean {
 }
 
 /**
- * Mark the actually visible current-conversation anchor. Returns the marked
- * anchor, or null when none can be derived. Clears any stale marker first
- * (rebind-safe). Pure DOM marking.
+ * Mark the actually visible current-conversation anchor plus its bounded row
+ * surface. Returns the marked anchor, or null when none can be derived.
+ * Clears any stale markers first (rebind-safe). Pure DOM marking.
  */
 export function syncActiveChatRow(token: string | null): HTMLElement | null {
   document
-    .querySelectorAll(`[${ACTIVE_CHAT_ROW_ATTR}]`)
-    .forEach((el) => el.removeAttribute(ACTIVE_CHAT_ROW_ATTR));
+    .querySelectorAll(`[${ACTIVE_CHAT_ROW_ATTR}], [${ACTIVE_CHAT_SURFACE_ATTR}]`)
+    .forEach((el) => {
+      el.removeAttribute(ACTIVE_CHAT_ROW_ATTR);
+      el.removeAttribute(ACTIVE_CHAT_SURFACE_ATTR);
+    });
   if (!token) return null;
 
   const wantedPath = `/c/${token}`;
@@ -89,14 +103,75 @@ export function syncActiveChatRow(token: string | null): HTMLElement | null {
   );
   const winner = scored[0]!.el;
   winner.setAttribute(ACTIVE_CHAT_ROW_ATTR, "true");
+  // Bounded paint surface: climb only while the candidate stays
+  // sidebar-row-sized; stop before project/section/nav groupings. Fallback
+  // is the anchor itself.
+  const surface = deriveRowSurface(winner);
+  surface.setAttribute(ACTIVE_CHAT_SURFACE_ATTR, "true");
   return winner;
 }
 
-/** Remove every active-chat-row marker (disable/restore/teardown path). */
+/** Count distinct conversation anchors under a node (grouping detector). */
+function conversationAnchorCount(root: ParentNode): number {
+  const paths = new Set<string>();
+  for (const a of Array.from(root.querySelectorAll<HTMLAnchorElement>('a[href*="/c/"]'))) {
+    try {
+      paths.add(
+        new URL(a.getAttribute("href") ?? "", window.location.origin).pathname,
+      );
+    } catch {
+      continue;
+    }
+  }
+  return paths.size;
+}
+
+function isRowSized(el: HTMLElement): boolean {
+  if (!el.isConnected) return false;
+  const rect = el.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) return false;
+  if (rect.height < ROW_MIN_HEIGHT_PX || rect.height > ROW_MAX_HEIGHT_PX) {
+    return false;
+  }
+  const vw = window.innerWidth || 0;
+  if (rect.width > ROW_MAX_WIDTH_PX) return false;
+  if (rect.left >= Math.min(420, vw * 0.4)) return false;
+  return true;
+}
+
+/**
+ * Derive the smallest useful rounded row wrapper containing `anchor`:
+ * start at the anchor, climb while the parent stays row-sized, and stop
+ * before anything grouping several chats (project/section/nav/sidebar) or
+ * leaving row geometry. Never returns document/body/html.
+ */
+function deriveRowSurface(anchor: HTMLElement): HTMLElement {
+  let surface: HTMLElement = anchor;
+  let node: HTMLElement | null = anchor.parentElement;
+  while (node && node !== document.body && node !== document.documentElement) {
+    if (
+      node.matches(
+        '[data-testid="sidebar"], nav[aria-label*="chat history" i]',
+      ) ||
+      conversationAnchorCount(node) > 1
+    ) {
+      break;
+    }
+    if (!isRowSized(node)) break;
+    surface = node;
+    node = node.parentElement;
+  }
+  return surface;
+}
+
+/** Remove every active-chat-row/surface marker (disable/restore/teardown). */
 export function clearActiveChatRowMarkers(
   root: ParentNode = document,
 ): void {
   root
-    .querySelectorAll(`[${ACTIVE_CHAT_ROW_ATTR}]`)
-    .forEach((el) => el.removeAttribute(ACTIVE_CHAT_ROW_ATTR));
+    .querySelectorAll(`[${ACTIVE_CHAT_ROW_ATTR}], [${ACTIVE_CHAT_SURFACE_ATTR}]`)
+    .forEach((el) => {
+      el.removeAttribute(ACTIVE_CHAT_ROW_ATTR);
+      el.removeAttribute(ACTIVE_CHAT_SURFACE_ATTR);
+    });
 }

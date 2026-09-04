@@ -121,6 +121,30 @@
   background-color: var(--cgl-conversation-bg) !important;
 }
 
+/* ---- active sidebar row force-paint (Phase 4) --------------------------
+ * The official selected gray may live on another layer inside/around the
+ * row, so the bounded surface takes the full background shorthand (killing
+ * any official gradient/image layer) while nested selected backgrounds
+ * inside ONLY this marked row are neutralized. Scoped strictly to the one
+ * marked surface — never the whole sidebar. Reset removes the markers and
+ * the official gray returns naturally. */
+:root.cgl-chat-bg-override [data-cgl-active-chat-surface="true"] {
+  background: var(--cgl-conversation-bg) !important;
+}
+
+:root.cgl-chat-bg-override [data-cgl-active-chat-surface="true"] > *,
+:root.cgl-chat-bg-override [data-cgl-active-chat-surface="true"] > * > * {
+  background-color: transparent !important;
+  background-image: none !important;
+}
+
+:root.cgl-chat-bg-override [data-cgl-active-chat-surface="true"]::before,
+:root.cgl-chat-bg-override [data-cgl-active-chat-surface="true"]::after,
+:root.cgl-chat-bg-override [data-cgl-active-chat-surface="true"] *::before,
+:root.cgl-chat-bg-override [data-cgl-active-chat-surface="true"] *::after {
+  background: transparent !important;
+}
+
 /* ---- sidebar visibility (Phase 3): guarded, marker-only, non-destructive ----
  * The only permitted mutation on the ChatGPT sidebar is the extension-owned
  * marker `data-cgl-sidebar-target="true"`. Hiding is performed by adding the
