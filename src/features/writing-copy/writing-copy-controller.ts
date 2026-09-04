@@ -661,7 +661,9 @@ export class WritingCopyController {
         this.host.setStatus("requested");
         break;
       case "copied": {
-        this.host.setStatus("copied");
+        // Durable-first ordering: visible success (check icon + accent) and
+        // the "Copied." announcement must NEVER precede durable persistence
+        // and marker verification. Clipboard success alone is not success.
         const persisted = await this.persistCopiedStateDetailed(target);
         Object.assign(this.tx, persisted.receiptFields());
         if (persisted.result.durableSaveSucceeded && target) {
@@ -681,6 +683,19 @@ export class WritingCopyController {
           (this.tx.copiedRangeCountAfter ?? 0) < 1
         ) {
           this.tx.failureCode = "COPYMARKER_RANGE_MISSING";
+        }
+        // Success feedback ONLY on genuine durable copy: saved + semantic +
+        // marker range + no failure anywhere. Anything else is a neutral
+        // non-success state (the hidden status must not announce "Copied.").
+        if (
+          persisted.result.durableSaveSucceeded &&
+          this.tx.semanticCopiedApplied &&
+          (this.tx.copiedRangeCountAfter ?? 0) >= 1 &&
+          this.tx.failureCode == null
+        ) {
+          this.host.setStatus("copied");
+        } else {
+          this.host.setStatus("unavailable");
         }
         break;
       }

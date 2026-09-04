@@ -128,7 +128,7 @@ describe("copy transaction receipt", () => {
     dom?.window.close();
   });
 
-  function installDom(url: string, html: string, opts?: { rejectWrite?: () => void }): void {
+  function installDom(url: string, html: string, opts?: { rejectWrite?: () => void; noHighlight?: boolean }): void {
     dom = new JSDOM(`<!doctype html><html><body>${html}</body></html>`, {
       url,
       pretendToBeVisual: true,
@@ -170,8 +170,10 @@ describe("copy transaction receipt", () => {
       constructor(..._ranges: unknown[]) {}
     }
     const win = dom.window as unknown as Record<string, unknown>;
-    win.Range = FakeRange;
-    win.Highlight = FakeHighlight;
+    if (!opts?.noHighlight) {
+      win.Range = FakeRange;
+      win.Highlight = FakeHighlight;
+    }
     const cssRegistry = { highlights: highlightRegistry };
     try { win.CSS = cssRegistry; } catch { /* globalThis copy below */ }
     const nav = dom.window.navigator as unknown as {
@@ -192,6 +194,10 @@ describe("copy transaction receipt", () => {
     } catch { /* ignore */ }
     g.Range = FakeRange;
     g.Highlight = FakeHighlight;
+    if (opts?.noHighlight) {
+      try { delete (g as Record<string, unknown>).Range; } catch { /* keep */ }
+      try { delete (g as Record<string, unknown>).Highlight; } catch { /* keep */ }
+    }
     g.CSS = cssRegistry;
     g.chrome = { storage: { local: storage } } as unknown as typeof chrome;
   }
@@ -222,6 +228,24 @@ describe("copy transaction receipt", () => {
     const btn = hostEl?.shadowRoot.querySelector("button");
     if (!btn) throw new Error("copy host button not mounted");
     (btn as HTMLButtonElement).click();
+  };
+
+  /** Whether the temporary success check icon is currently shown. */
+  const successCheckVisible = (): boolean => {
+    const hostEl = dom.window.document.querySelector(
+      `[${HOST_ATTR}]`,
+    ) as (HTMLElement & { shadowRoot: ShadowRoot }) | null;
+    return (
+      hostEl?.shadowRoot.querySelector("button .cgl-check-icon") != null
+    );
+  };
+
+  /** Visible text of the accessibility-only host status region. */
+  const hostStatusText = (): string | null => {
+    const hostEl = dom.window.document.querySelector(
+      `[${HOST_ATTR}]`,
+    ) as (HTMLElement & { shadowRoot: ShadowRoot }) | null;
+    return hostEl?.shadowRoot.querySelector('[role="status"]')?.textContent ?? null;
   };
 
   it("SUCCESS: full receipt proves every stage green", async () => {
@@ -258,6 +282,9 @@ describe("copy transaction receipt", () => {
     expect(tx.failureCode).toBeNull();
     // Host status enum reflects the completed copy.
     expect(c.buildReceipt().hostStatus).toBe("copied");
+    // A — durable success: success feedback starts (check icon shown).
+    expect(successCheckVisible()).toBe(true);
+    expect(hostStatusText()).toBe("Copied.");
 
     // Live state agrees: exactly one copied block + one range + one record.
     await until(() => c.visualLayer.rangeCount === 1);
@@ -289,6 +316,9 @@ describe("copy transaction receipt", () => {
     expect(tx.failureCode).toBe("CLIPBOARD_WRITE_REJECTED");
     expect(stateOf("editor-0")).not.toBe("copied");
     expect(c.buildReceipt().hostStatus).toBe("unavailable");
+    // D — clipboard unavailable: no success feedback, no false announcement.
+    expect(successCheckVisible()).toBe(false);
+    expect(hostStatusText()).toBe("Copy unavailable.");
   });
 
   it("DURABLE SAVE FAILED: clipboard ok but storage fails -> uncopied, exact code", async () => {
@@ -309,6 +339,36 @@ describe("copy transaction receipt", () => {
     expect(tx.semanticCopiedApplied).toBe(false);
     expect(stateOf("editor-0")).toBe("uncopied");
     expect(tx.failureCode).toBe("DURABLE_SAVE_FAILED");
+    // B — durable failure after clipboard success: NO success feedback and
+    // the hidden status must not announce "Copied.".
+    expect(c.buildReceipt().hostStatus).toBe("unavailable");
+    expect(successCheckVisible()).toBe(false);
+    expect(hostStatusText()).toBe("Copy unavailable.");
+  });
+
+  it("RANGE MISSING: durable ok + semantic ok but no marker range -> no success", async () => {
+    installDom(`https://chatgpt.com/c/${SECRET_ROUTE}`, CONVERSATION(), {
+      noHighlight: true,
+    });
+    const c = newController();
+    c.apply(makeSettings());
+    giveHostRealSize();
+
+    clickCopy();
+    await until(() => c.lastTransaction.completedAt != null);
+
+    const tx = c.lastTransaction;
+    expect(tx.clipboardWriteResolved).toBe(true);
+    expect(tx.copyOutcome).toBe("copied");
+    expect(tx.durableSaveSucceeded).toBe(true);
+    expect(tx.semanticCopiedApplied).toBe(true);
+    expect(tx.copiedRangeCountAfter).toBe(0);
+    // C — marker verification failure: failure code set, NO success check.
+    expect(tx.failureCode).toBe("COPYMARKER_RANGE_MISSING");
+    expect(c.buildReceipt().hostStatus).toBe("unavailable");
+    expect(successCheckVisible()).toBe(false);
+    expect(hostStatusText()).not.toBe("Copied.");
+    c.teardown();
   });
 
   it("STATE REVERSION: applied-then-lost COPIED observed by diagnosis (no polling)", async () => {
