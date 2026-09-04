@@ -316,10 +316,14 @@ export class WritingCopyHost {
         break;
       case "smart": {
         // Deterministic upper-right anchor: a fixed row offset below the
-        // block top, independent of block height. The shared clamp below
-        // keeps the full circle onscreen; the manual drag offset (applied
-        // by the caller path) stays higher priority.
-        top = rect.top + INITIAL_ROW_OFFSET_PX;
+        // VISIBLE block top, independent of block height. For extremely tall
+        // blocks whose DOM top is far above the viewport, anchoring from
+        // rect.top would clamp to the browser edge; visibleTop keeps the
+        // bubble ~132px below the visible portion instead. The shared clamp
+        // below keeps the full circle onscreen; the manual drag offset
+        // (applied by the caller path) stays higher priority.
+        const visibleTop = Math.max(rect.top, 0);
+        top = visibleTop + INITIAL_ROW_OFFSET_PX;
         break;
       }
       case "middle-right":
