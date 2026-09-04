@@ -126,6 +126,11 @@ export class FoldingController {
 
     const codeStates = new Map<HTMLElement, boolean>();
     for (const pre of longCodeBlocks(container)) {
+      // Never touch code inside the currently streaming turn: no auto-fold,
+      // no marker, no control for this reconciliation. When generation ends,
+      // the next refresh folds it normally through the existing lifecycle.
+      const ownerTurn = pre.closest(ASSISTANT_TURN_SELECTOR);
+      if (streamingTurn && ownerTurn === streamingTurn) continue;
       if (!pre.isConnected) continue;
       const folded = pre.getAttribute(MARKER_CODE_FOLDED) === "true";
       if (!folded && !this.userExpanded.has(pre)) markCodeFolded(pre);
