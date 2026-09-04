@@ -39,15 +39,28 @@ const STATUS_IDLE = "Nothing safe to copy.";
 
 /** Visible copy bubble diameter (true circle at every viewport width). */
 export const COPY_BUBBLE_PX = 44;
+/**
+ * Fixed smart-anchor row offset: the default (smart) base position sits
+ * exactly three bubble cells below the WritingBlock top, so the initial
+ * bubble location is deterministic and independent of block height.
+ */
+export const INITIAL_ROW_OFFSET_PX = 3 * COPY_BUBBLE_PX; // 132
+/** How long the success check replaces the copy icon after copied status. */
+export const SUCCESS_FEEDBACK_MS = 900;
 /** Drag hit-zone diameter on the bubble's upper-right edge. */
 export const COPY_HANDLE_PX = 16;
 /** Extension-owned layer: strictly above the normal X-Ray panel. */
 export const COPY_HOST_Z_INDEX = 2147483647;
 
 const COPY_ICON_SVG =
-  `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">` +
+  `<svg class="cgl-copy-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">` +
   `<rect x="9" y="9" width="11" height="11" rx="2.5" fill="none" stroke="currentColor" stroke-width="2"/>` +
   `<path d="M5.5 15h-1a2 2 0 0 1-2-2V5.5a2 2 0 0 1 2-2H12a2 2 0 0 1 2 2v1" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>` +
+  `</svg>`;
+
+const CHECK_ICON_SVG =
+  `<svg class="cgl-check-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">` +
+  `<path d="M4.5 12.5l5 5 10-11" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>` +
   `</svg>`;
 
 const HOST_STYLE = `
@@ -79,6 +92,22 @@ const HOST_STYLE = `
   .cgl-copy-bubble:focus-visible {
     box-shadow: 0 0 0 2px #4c8dff;
     border-color: #4c8dff;
+  }
+  .cgl-copy-bubble {
+    transition: transform 100ms ease;
+    transform-origin: center;
+  }
+  .cgl-copy-bubble:active {
+    transform: scale(0.88);
+  }
+  .cgl-copy-bubble.cgl-success {
+    background: #1e3a2b;
+    border-color: #35d07f;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .cgl-copy-bubble {
+      transition: none;
+    }
   }
   .cgl-copy-bubble svg {
     width: 21px;
@@ -141,10 +170,13 @@ export class WritingCopyHost {
   private dragPointerId: number | null = null;
   private dragStart: { x: number; y: number } | null = null;
   private dragOffsetStart: { x: number; y: number } | null = null;
+
   private readonly boundPointerDown = (e: PointerEvent): void => this.onDragStart(e);
   private readonly boundPointerMove = (e: PointerEvent): void => this.onDragMove(e);
   private readonly boundPointerUp = (e: PointerEvent): void => this.onDragEnd(e);
   private readonly boundPointerCancel = (e: PointerEvent): void => this.onDragEnd(e);
+  /** Single bounded success-feedback timer (check icon + accent). */
+  private successTimer: ReturnType<typeof setTimeout> | null = null;
 
   /** True when the host exists in the DOM. */
   get isMounted(): boolean {
@@ -283,9 +315,11 @@ export class WritingCopyHost {
         top = rect.bottom - hostH;
         break;
       case "smart": {
-        // Align usefully with the block: middle, clamped fully onscreen.
-        const mid = rect.top + rect.height / 2 - hostH / 2;
-        top = Math.max(margin, Math.min(mid, vh - hostH - margin));
+        // Deterministic upper-right anchor: a fixed row offset below the
+        // block top, independent of block height. The shared clamp below
+        // keeps the full circle onscreen; the manual drag offset (applied
+        // by the caller path) stays higher priority.
+        top = rect.top + INITIAL_ROW_OFFSET_PX;
         break;
       }
       case "middle-right":
@@ -424,9 +458,18 @@ export class WritingCopyHost {
    * Report a status. Only the fixed safe strings are permitted; any other
    * value is coerced to a neutral message so copied text can NEVER enter the
    * status region, the DOM, or logs.
+   *
+   * Visible success feedback (check icon + accent) originates ONLY from the
+   * real `"copied"` transaction outcome — never from a bare click — and
+   * reverts after SUCCESS_FEEDBACK_MS without touching semantic state.
    */
   setStatus(status: HostStatus): void {
     this.lastStatus = status;
+    if (status === "copied") {
+      this.showSuccessFeedback();
+    } else {
+      this.clearSuccessFeedback();
+    }
     if (!this.statusEl) return;
     switch (status) {
       case "copied":
@@ -448,9 +491,46 @@ export class WritingCopyHost {
     }
   }
 
-  /** Remove the host, drag state, listeners, and references. Idempotent. */
+  /** Whether the temporary success check is currently shown. */
+  get isSuccessVisible(): boolean {
+    return this.button?.classList.contains("cgl-success") ?? false;
+  }
+
+  private showSuccessFeedback(): void {
+    if (this.successTimer != null) {
+      clearTimeout(this.successTimer);
+      this.successTimer = null;
+    }
+    if (this.button) {
+      this.button.innerHTML = CHECK_ICON_SVG;
+      this.button.classList.add("cgl-success");
+    }
+    // A second successful copy restarts the interval; completion only
+    // restores the icon/style, never semantic copied state.
+    this.successTimer = setTimeout(() => {
+      this.successTimer = null;
+      this.clearSuccessFeedback();
+    }, SUCCESS_FEEDBACK_MS);
+  }
+
+  private clearSuccessFeedback(): void {
+    if (this.successTimer != null) {
+      clearTimeout(this.successTimer);
+      this.successTimer = null;
+    }
+    if (this.button) {
+      this.button.innerHTML = COPY_ICON_SVG;
+      this.button.classList.remove("cgl-success");
+    }
+  }
+
+  /** Remove the host, drag state, feedback timer, listeners, references. Idempotent. */
   unmount(): void {
     this.releaseDrag();
+    if (this.successTimer != null) {
+      clearTimeout(this.successTimer);
+      this.successTimer = null;
+    }
     if (this.button) this.button.onclick = null;
     if (this.handle) this.handle.removeEventListener("pointerdown", this.boundPointerDown);
     if (this.host) {

@@ -1,8 +1,10 @@
-import { describe, it, expect, afterEach, beforeEach } from "vitest";
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { JSDOM } from "jsdom";
 import {
   WritingCopyHost,
   COPY_BUBBLE_PX,
+  INITIAL_ROW_OFFSET_PX,
+  SUCCESS_FEEDBACK_MS,
 } from "../../../src/features/writing-copy/writing-copy-host.js";
 import { XrayHost } from "../../../src/features/maintenance/xray-host.js";
 
@@ -148,7 +150,7 @@ describe("draggable copy bubble", () => {
     host.positionAgainst(block, "smart");
     const el = dom.window.document.querySelector('[data-cgl-writing-copy-host="true"]') as HTMLElement;
     expect(el.style.left).toBe("306px");
-    expect(el.style.top).toBe("178px");
+    expect(el.style.top).toBe("232px");
 
     const handle = shadowOf(dom).querySelector(".cgl-drag-handle")!;
     handle.dispatchEvent(pointerEvent(dom, "pointerdown", 500, 500));
@@ -156,7 +158,7 @@ describe("draggable copy bubble", () => {
     handle.dispatchEvent(pointerEvent(dom, "pointerup", 540, 530));
 
     expect(el.style.left).toBe("346px");
-    expect(el.style.top).toBe("208px");
+    expect(el.style.top).toBe("262px");
     expect(host.dragOffset).toEqual({ x: 40, y: 30 });
   });
 
@@ -209,11 +211,11 @@ describe("draggable copy bubble", () => {
     handle.dispatchEvent(pointerEvent(dom, "pointerup", 540, 530));
     expect(host.dragOffset).toEqual({ x: 40, y: 30 });
 
-    // A second block: smart base = right+6 / vertical middle, offset reapplied.
+    // A second block: smart base = right+6 / fixed row offset, offset reapplied.
     host.positionAgainst(blockWith({ top: 400, left: 200, width: 400, height: 200 }, dom), "smart");
     const el = dom.window.document.querySelector('[data-cgl-writing-copy-host="true"]') as HTMLElement;
     expect(el.style.left).toBe(`${600 + 6 + 40}px`);
-    expect(el.style.top).toBe(`${400 + 100 - 22 + 30}px`);
+    expect(el.style.top).toBe(`${400 + 132 + 30}px`);
     expect(host.dragOffset).toEqual({ x: 40, y: 30 });
   });
 
@@ -250,5 +252,125 @@ describe("draggable copy bubble", () => {
     expect(copyZ).toBeDefined();
     expect(panelZ).toBeDefined();
     expect(Number(copyZ)).toBeGreaterThan(Number(panelZ));
+  });
+
+  it("smart base is a fixed upper-right anchor, independent of block height", () => {
+    expect(INITIAL_ROW_OFFSET_PX).toBe(3 * COPY_BUBBLE_PX);
+    dom = installDom();
+    const host = new WritingCopyHost();
+    host.mount(() => {});
+    const el = dom.window.document.querySelector('[data-cgl-writing-copy-host="true"]') as HTMLElement;
+    // Same top/right, very different heights -> identical initial position.
+    host.positionAgainst(blockWith({ top: 100, left: 500, width: 300, height: 200 }, dom), "smart");
+    expect(el.style.left).toBe("806px");
+    expect(el.style.top).toBe("232px");
+    host.positionAgainst(blockWith({ top: 100, left: 500, width: 300, height: 2000 }, dom), "smart");
+    expect(el.style.left).toBe("806px");
+    expect(el.style.top).toBe("232px");
+  });
+
+  it("manual offset survives reposition and viewport resize", () => {
+    dom = installDom();
+    const host = new WritingCopyHost();
+    host.mount(() => {});
+    const el = dom.window.document.querySelector('[data-cgl-writing-copy-host="true"]') as HTMLElement;
+    host.positionAgainst(blockWith({ top: 100, left: 0, width: 300, height: 200 }, dom), "smart");
+    const handle = shadowOf(dom).querySelector(".cgl-drag-handle")!;
+    handle.dispatchEvent(pointerEvent(dom, "pointerdown", 500, 500));
+    handle.dispatchEvent(pointerEvent(dom, "pointermove", 520, 510));
+    handle.dispatchEvent(pointerEvent(dom, "pointerup", 520, 510));
+    expect(host.dragOffset).toEqual({ x: 20, y: 10 });
+
+    // Geometry recalculation keeps the offset.
+    host.positionAgainst(blockWith({ top: 100, left: 0, width: 300, height: 200 }, dom), "smart");
+    expect(el.style.left).toBe(`${300 + 6 + 20}px`);
+    expect(el.style.top).toBe(`${100 + 132 + 10}px`);
+
+    // Viewport resize re-clamps but preserves the offset.
+    Object.defineProperty(dom.window, "innerWidth", { value: 612, configurable: true });
+    host.positionAgainst(blockWith({ top: 100, left: 0, width: 300, height: 200 }, dom), "smart");
+    expect(host.dragOffset).toEqual({ x: 20, y: 10 });
+    expect(parseInt(el.style.left, 10)).toBeLessThanOrEqual(612 - 44 - 6);
+    expect(parseInt(el.style.left, 10)).toBeGreaterThanOrEqual(6);
+  });
+
+  it("press contract: only the central bubble scales, with reduced-motion guard", () => {
+    dom = installDom();
+    new WritingCopyHost().mount(() => {});
+    const css = styleText(dom);
+    expect(css).toMatch(/\.cgl-copy-bubble:active\s*{[^}]*scale\(0\.88\)/);
+    expect(css).toContain("prefers-reduced-motion");
+    // The drag zone must not receive the press transform.
+    const handleRules = [...css.matchAll(/\.cgl-drag-handle[^{]*{[^}]*}/g)].join(" ");
+    expect(handleRules).not.toContain("transform");
+    expect(handleRules).not.toContain("scale");
+  });
+
+  it("copied status shows a check for ~900ms, then restores the copy icon", () => {
+    dom = installDom();
+    const host = new WritingCopyHost();
+    host.mount(() => {});
+    expect(SUCCESS_FEEDBACK_MS).toBe(900);
+    vi.useFakeTimers();
+    try {
+      const btn = () => shadowOf(dom).querySelector("button")!;
+      expect(btn().querySelector(".cgl-copy-icon")).not.toBeNull();
+      host.setStatus("copied");
+      expect(host.isSuccessVisible).toBe(true);
+      expect(btn().querySelector(".cgl-check-icon")).not.toBeNull();
+      expect(btn().querySelector(".cgl-copy-icon")).toBeNull();
+      // Geometry unchanged during feedback.
+      const css = styleText(dom);
+      expect(css).toContain("width: 44px");
+
+      vi.advanceTimersByTime(899);
+      expect(host.isSuccessVisible).toBe(true);
+      vi.advanceTimersByTime(1);
+      expect(host.isSuccessVisible).toBe(false);
+      expect(btn().querySelector(".cgl-copy-icon")).not.toBeNull();
+      expect(btn().querySelector(".cgl-check-icon")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("non-copied statuses never show the success check", () => {
+    dom = installDom();
+    const host = new WritingCopyHost();
+    host.mount(() => {});
+    vi.useFakeTimers();
+    try {
+      host.setStatus("unavailable");
+      expect(host.isSuccessVisible).toBe(false);
+      expect(shadowOf(dom).querySelector("button")!.querySelector(".cgl-check-icon")).toBeNull();
+      host.setStatus("requested");
+      expect(host.isSuccessVisible).toBe(false);
+      host.setStatus("idle");
+      expect(host.isSuccessVisible).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("success timer is cleared on unmount with no retained refs", () => {
+    dom = installDom();
+    const host = new WritingCopyHost();
+    host.mount(() => {});
+    vi.useFakeTimers();
+    try {
+      host.setStatus("copied");
+      expect(host.isSuccessVisible).toBe(true);
+      host.unmount();
+      expect(host.isMounted).toBe(false);
+      expect(host.isSuccessVisible).toBe(false);
+      vi.advanceTimersByTime(5000);
+      // Fresh mount restores the normal icon with no pending timer.
+      host.mount(() => {});
+      const btn = shadowOf(dom).querySelector("button")!;
+      expect(btn.querySelector(".cgl-copy-icon")).not.toBeNull();
+      expect(btn.querySelector(".cgl-check-icon")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
