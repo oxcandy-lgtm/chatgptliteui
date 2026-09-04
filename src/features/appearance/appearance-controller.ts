@@ -9,7 +9,7 @@ import {
   hasAppearanceEffects,
   isSafeCosmeticDetection,
 } from "./presets.js";
-import { getConversationBackground } from "./conversation-background.js";
+import { resolveChatBackground } from "./project-background.js";
 import { clearActiveChatRowMarkers } from "./active-chat-row.js";
 import { clearSidebarChatColorMarkers } from "./sidebar-chat-colors.js";
 import type { ChatGptAdapter } from "../../adapters/chatgpt-adapter.js";
@@ -174,16 +174,17 @@ export class AppearanceController {
   }
 
   /**
-   * Reconcile the per-conversation background override for `conversationFp`.
-   * Unlike the add-only first version, this ALWAYS clears the previous
-   * override first, then restores the effective fallback (persisted GLOBAL
-   * theme values when the global theme is enabled, otherwise the official
-   * background via variable removal), and finally applies the current
-   * conversation override when one exists. Reset/uncheck therefore restores
-   * the fallback immediately with no reload.
+   * Reconcile the per-conversation background override. Resolution order:
+   * explicit chat color, else project color, else the global/official
+   * fallback (restored first so a reset chat inside a colored project
+   * immediately shows the project color, and a project reset immediately
+   * drops inherited paint). Overrides ONLY the page/conversation background
+   * variables — never user/assistant/code/writing/pulse/marker values and
+   * never global theme settings.
    */
   async reconcileConversationBackgroundOverride(
     conversationFp: string | null,
+    projectFp: string | null,
     settings: Settings,
   ): Promise<void> {
     this.root.classList.remove("cgl-chat-bg-override");
@@ -204,8 +205,8 @@ export class AppearanceController {
       this.root.style.removeProperty("--cgl-page-bg");
       this.root.style.removeProperty("--cgl-conversation-bg");
     }
-    if (!conversationFp) return;
-    const background = await getConversationBackground(conversationFp);
+    if (!conversationFp && !projectFp) return;
+    const background = await resolveChatBackground(conversationFp, projectFp);
     if (!background) return;
     this.root.classList.add("cgl-chat-bg-override");
     this.root.style.setProperty("--cgl-page-bg", background);

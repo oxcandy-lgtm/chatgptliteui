@@ -15,6 +15,10 @@ import { WritingCopyController, WRITING_COPY_HOST_ATTR } from "../features/writi
 import { hasWritingCopyEffects } from "../features/writing-copy/writing-copy-state.js";
 import { conversationFingerprintFromLocation } from "../features/writing-copy/block-identity.js";
 import { conversationTokenFromLocation } from "../features/writing-copy/block-identity.js";
+import {
+  projectFingerprintFromToken,
+  projectTokenFromLocation,
+} from "../features/writing-copy/block-identity.js";
 import { syncActiveChatRow } from "../features/appearance/active-chat-row.js";
 import { hydrateSidebarChatColors } from "../features/appearance/sidebar-chat-colors.js";
 import {
@@ -22,6 +26,11 @@ import {
   CURRENT_CONVERSATION_KEY,
   publishCurrentConversationFingerprint,
 } from "../features/appearance/conversation-background.js";
+import {
+  CURRENT_PROJECT_KEY,
+  PROJECT_APPEARANCE_PREFIX,
+  publishCurrentProjectFingerprint,
+} from "../features/appearance/project-background.js";
 import {
   XrayController,
   isXrayShortcut,
@@ -103,15 +112,17 @@ let observerEpoch = 0;
 let lastSettings: Settings | null = null;
 
 /**
- * Last conversation fingerprint published to storage (change guard — the
- * pointer write happens at most once per route, never per refresh).
+ * Last conversation/project fingerprints published to storage (change guards
+ * — pointer writes happen at most once per route, never per refresh).
  */
 let lastPublishedConversationFp: string | null | undefined = undefined;
+let lastPublishedProjectFp: string | null | undefined = undefined;
 
 /**
- * Publish the current conversation identity for the popup (fingerprint
- * only — never URL/token/title/text) and apply any stored per-chat
- * background override. Best-effort async; never blocks the sync apply.
+ * Publish the current conversation + project identities for the popup
+ * (fingerprints only — never URL/token/title/text) and reconcile the
+ * resolved chat-or-project background override. Best-effort async; never
+ * blocks the sync apply.
  */
 function syncConversationAppearance(settings: Settings): void {
   void (async () => {
@@ -121,8 +132,13 @@ function syncConversationAppearance(settings: Settings): void {
       lastPublishedConversationFp = fp;
       await publishCurrentConversationFingerprint(fp);
     }
+    const projFp = await projectFingerprintFromToken(projectTokenFromLocation());
+    if (projFp !== lastPublishedProjectFp) {
+      lastPublishedProjectFp = projFp;
+      await publishCurrentProjectFingerprint(projFp);
+    }
     if (settings.enabled) {
-      await applier.reconcileConversationBackgroundOverride(fp, settings);
+      await applier.reconcileConversationBackgroundOverride(fp, projFp, settings);
     }
   })();
 }
@@ -666,22 +682,28 @@ async function bootstrap(): Promise<void> {
     storageChangeListener = (changes, area) => {
       if (area !== "local") return;
       if (!("settings" in changes)) {
-        // Live per-chat background update (popup save/reset): no settings
-        // reload needed — just re-apply the override for this conversation.
+        // Live appearance update (popup save/reset for chat OR project):
+        // no settings reload needed — reconcile the resolved background
+        // and rehydrate sidebar row colors for this conversation.
         if (
           Object.keys(changes).some(
             (k) =>
               k === CURRENT_CONVERSATION_KEY ||
-              k.startsWith(CONVERSATION_APPEARANCE_PREFIX),
+              k === CURRENT_PROJECT_KEY ||
+              k.startsWith(CONVERSATION_APPEARANCE_PREFIX) ||
+              k.startsWith(PROJECT_APPEARANCE_PREFIX),
           )
         ) {
           void (async () => {
             const s = lastSettings;
             if (quiesced || !s?.enabled) return;
             const fp = await conversationFingerprintFromLocation();
-            await applier.reconcileConversationBackgroundOverride(fp, s);
-            // A reset chat loses its sidebar color immediately; other saved
-            // rows persist (hydrate clears stale markers first, then marks).
+            const projFp = await projectFingerprintFromToken(
+              projectTokenFromLocation(),
+            );
+            await applier.reconcileConversationBackgroundOverride(fp, projFp, s);
+            // A reset chat/project loses its sidebar color immediately;
+            // other saved rows persist (hydrate clears stale first).
             await hydrateSidebarChatColors().catch(() => {
               /* best-effort paint; next refresh retries */
             });

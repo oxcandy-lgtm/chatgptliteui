@@ -27,7 +27,9 @@ import {
   type ActiveChatRowDiagnostic,
 } from "../appearance/active-chat-row.js";
 import {
+  getProjectAppearanceDiagnostic,
   getSidebarChatColorDiagnostic,
+  type ProjectAppearanceDiagnostic,
   type SidebarChatColorDiagnostic,
 } from "../appearance/sidebar-chat-colors.js";
 
@@ -67,6 +69,13 @@ export interface XrayReportV1 {
    * and painted rows. Never token/URL/title/project ID.
    */
   sidebarChatColor: SidebarChatColorDiagnostic;
+  /**
+   * Project background inheritance receipt (counts only — never raw IDs,
+   * URLs, or titles): current project identity availability, visible
+   * projects, project color matches, painted folders, inherited rows, and
+   * explicit chat overrides.
+   */
+  projectAppearance: ProjectAppearanceDiagnostic;
   /**
    * Active sidebar chat highlight receipt (counts/flags only — never token,
    * URL, title, or project ID): how many route anchors were collected, how
@@ -335,6 +344,7 @@ export function buildXrayReport(
     writingPipeline: scan.writingPipeline,
     activeChat: getActiveChatRowDiagnostic(),
     sidebarChatColor: getSidebarChatColorDiagnostic(),
+    projectAppearance: getProjectAppearanceDiagnostic(),
     editableRegions: scan.editableRegions,
     actions: scan.actions,
     pickedTarget,

@@ -63,6 +63,53 @@ export async function conversationFingerprintFromLocation(): Promise<string | nu
 }
 
 /**
+ * Project identifier extracted from a pathname with structural route
+ * semantics (`/g/<project>` anywhere in the path). Title text is never
+ * used. Returns null when the pathname carries no project segment.
+ * Raw IDs stay memory-only; only fingerprints are persisted by callers.
+ */
+export function extractProjectIdFromPath(pathname: string): string | null {
+  try {
+    const match = pathname.match(/\/g\/([^/?]+)/);
+    const id = match?.[1];
+    return id ? decodeURIComponent(id) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Project identifier for the current location (structural, memory-only). */
+export function projectTokenFromLocation(): string | null {
+  try {
+    return extractProjectIdFromPath(window.location.pathname);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * SHA-256 project fingerprint with the SAME privacy pattern as conversation
+ * identity (first 128 bits, 32 hex chars). Raw project IDs never leave this
+ * function and are never persisted by callers.
+ */
+export async function projectFingerprintFromToken(
+  projectId: string | null,
+): Promise<string | null> {
+  if (!projectId) return null;
+  if (typeof crypto === "undefined" || !crypto.subtle) return null;
+  try {
+    const data = new TextEncoder().encode(`project:${projectId}`);
+    const digest = await crypto.subtle.digest("SHA-256", data);
+    const bytes = new Uint8Array(digest);
+    let hex = "";
+    for (const b of bytes) hex += b.toString(16).padStart(2, "0");
+    return hex.slice(0, CONVERSATION_FP_HEX_CHARS);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Structural block identity shared by save and hydration paths.
  *
  * Assistant-turn indexing is scoped to the CURRENT detected conversation via

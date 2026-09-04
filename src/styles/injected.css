@@ -170,6 +170,28 @@
   background: transparent !important;
 }
 
+/* ---- project folder row colors (Phase 4) --------------------------------
+ * Same bounded-surface technique as persistent chat rows: the project
+ * folder owns its element-local color, nested official backgrounds inside
+ * ONLY the marked folder are neutralized, and everything else stays
+ * ChatGPT-controlled. Teardown removes markers and variables. */
+[data-cgl-project-color-surface="true"] {
+  background: var(--cgl-project-bg) !important;
+}
+
+[data-cgl-project-color-surface="true"] > *,
+[data-cgl-project-color-surface="true"] > * > * {
+  background-color: transparent !important;
+  background-image: none !important;
+}
+
+[data-cgl-project-color-surface="true"]::before,
+[data-cgl-project-color-surface="true"]::after,
+[data-cgl-project-color-surface="true"] *::before,
+[data-cgl-project-color-surface="true"] *::after {
+  background: transparent !important;
+}
+
 /* ---- sidebar visibility (Phase 3): guarded, marker-only, non-destructive ----
  * The only permitted mutation on the ChatGPT sidebar is the extension-owned
  * marker `data-cgl-sidebar-target="true"`. Hiding is performed by adding the

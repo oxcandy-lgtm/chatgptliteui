@@ -35,15 +35,17 @@ export class ThemeApplier {
 
   /**
    * Reconcile the stored per-conversation background override (clear stale
-   * override, restore global/official fallback, apply current override when
-   * present). Call only while the extension is enabled.
+   * override, restore global/official fallback, apply resolved chat-or-
+   * project color when present). Call only while the extension is enabled.
    */
   reconcileConversationBackgroundOverride(
     conversationFp: string | null,
+    projectFp: string | null,
     settings: Settings,
   ): Promise<void> {
     return this.controller.reconcileConversationBackgroundOverride(
       conversationFp,
+      projectFp,
       settings,
     );
   }
