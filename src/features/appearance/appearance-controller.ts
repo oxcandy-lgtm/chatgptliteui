@@ -11,6 +11,7 @@ import {
 } from "./presets.js";
 import { getConversationBackground } from "./conversation-background.js";
 import { clearActiveChatRowMarkers } from "./active-chat-row.js";
+import { clearSidebarChatColorMarkers } from "./sidebar-chat-colors.js";
 import type { ChatGptAdapter } from "../../adapters/chatgpt-adapter.js";
 
 /**
@@ -222,6 +223,7 @@ export class AppearanceController {
     this.marked = [];
     clearAllMarkers(document);
     clearActiveChatRowMarkers(document);
+    clearSidebarChatColorMarkers(document);
   }
 }
 

@@ -26,6 +26,10 @@ import {
   getActiveChatRowDiagnostic,
   type ActiveChatRowDiagnostic,
 } from "../appearance/active-chat-row.js";
+import {
+  getSidebarChatColorDiagnostic,
+  type SidebarChatColorDiagnostic,
+} from "../appearance/sidebar-chat-colors.js";
 
 /** Top-level report schema (stable). */
 export interface XrayReportV1 {
@@ -57,6 +61,12 @@ export interface XrayReportV1 {
    */
   writingBlockFallback: XrayScan["writingBlockFallback"];
   writingPipeline: XrayScan["writingPipeline"];
+  /**
+   * Persistent per-chat sidebar color hydration receipt (counts only):
+   * collected route anchors, fingerprinted tokens, stored-color matches,
+   * and painted rows. Never token/URL/title/project ID.
+   */
+  sidebarChatColor: SidebarChatColorDiagnostic;
   /**
    * Active sidebar chat highlight receipt (counts/flags only — never token,
    * URL, title, or project ID): how many route anchors were collected, how
@@ -324,6 +334,7 @@ export function buildXrayReport(
     writingBlockFallback: scan.writingBlockFallback,
     writingPipeline: scan.writingPipeline,
     activeChat: getActiveChatRowDiagnostic(),
+    sidebarChatColor: getSidebarChatColorDiagnostic(),
     editableRegions: scan.editableRegions,
     actions: scan.actions,
     pickedTarget,

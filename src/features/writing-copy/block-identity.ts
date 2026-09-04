@@ -29,13 +29,15 @@ export function conversationTokenFromLocation(): string | null {
 const CONVERSATION_FP_HEX_CHARS = 32; // 128 bits
 
 /**
- * Compact SHA-256 fingerprint of the conversation token (first 128 bits as 32
- * hex chars). Returns `null` when there is no valid conversation token or when
- * Web Crypto SHA-256 is unavailable — fail closed, never a fallback hash of
- * arbitrary location data. The raw token never leaves this function.
+ * Compact SHA-256 fingerprint of a conversation token (first 128 bits as 32
+ * hex chars). SAME semantics for the current location and for sidebar anchor
+ * tokens, so per-chat storage keys match exactly. Returns `null` for empty
+ * input or unavailable Web Crypto — fail closed. The raw token never leaves
+ * this function and is never persisted by callers.
  */
-export async function conversationFingerprintFromLocation(): Promise<string | null> {
-  const token = conversationTokenFromLocation();
+export async function conversationFingerprintFromToken(
+  token: string | null,
+): Promise<string | null> {
   if (!token) return null;
   if (typeof crypto === "undefined" || !crypto.subtle) return null;
   try {
@@ -48,6 +50,16 @@ export async function conversationFingerprintFromLocation(): Promise<string | nu
   } catch {
     return null;
   }
+}
+
+/**
+ * Compact SHA-256 fingerprint of the conversation token (first 128 bits as 32
+ * hex chars). Returns `null` when there is no valid conversation token or when
+ * Web Crypto SHA-256 is unavailable — fail closed, never a fallback hash of
+ * arbitrary location data. The raw token never leaves this function.
+ */
+export async function conversationFingerprintFromLocation(): Promise<string | null> {
+  return conversationFingerprintFromToken(conversationTokenFromLocation());
 }
 
 /**

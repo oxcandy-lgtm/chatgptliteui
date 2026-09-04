@@ -215,9 +215,10 @@ function isRowSized(el: HTMLElement): boolean {
  * Derive the smallest useful rounded row wrapper containing `anchor`:
  * start at the anchor, climb while the parent stays row-sized, and stop
  * before anything grouping several chats (project/section/nav/sidebar) or
- * leaving row geometry. Never returns document/body/html.
+ * leaving row geometry. Never returns document/body/html. Shared by the
+ * active-chat highlight and the persistent per-chat sidebar colors.
  */
-function deriveRowSurface(anchor: HTMLElement): HTMLElement {
+export function deriveRowSurface(anchor: HTMLElement): HTMLElement {
   let surface: HTMLElement = anchor;
   let node: HTMLElement | null = anchor.parentElement;
   while (node && node !== document.body && node !== document.documentElement) {

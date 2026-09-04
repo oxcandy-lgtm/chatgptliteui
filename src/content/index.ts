@@ -16,6 +16,7 @@ import { hasWritingCopyEffects } from "../features/writing-copy/writing-copy-sta
 import { conversationFingerprintFromLocation } from "../features/writing-copy/block-identity.js";
 import { conversationTokenFromLocation } from "../features/writing-copy/block-identity.js";
 import { syncActiveChatRow } from "../features/appearance/active-chat-row.js";
+import { hydrateSidebarChatColors } from "../features/appearance/sidebar-chat-colors.js";
 import {
   CONVERSATION_APPEARANCE_PREFIX,
   CURRENT_CONVERSATION_KEY,
@@ -161,11 +162,18 @@ const scheduleMarkerRefresh = debounce((): void => {
       sidebarController.refresh(settings);
       writingCopyController.refresh(settings);
       // Rebind the active sidebar row (rerenders replace rows); tint still
-      // gated on the per-chat override class.
+      // gated on the per-chat override class. Persistent per-chat row
+      // colors rehydrate here too (rerender/scroll replacement coverage) —
+      // only while enabled, so OFF stays official.
       try {
         syncActiveChatRow(conversationTokenFromLocation());
       } catch {
         /* DOM lookup must never break the coalesced refresh */
+      }
+      if (settings.enabled) {
+        void hydrateSidebarChatColors().catch(() => {
+          /* best-effort paint; next refresh retries */
+        });
       }
     })
     .catch((err) => handleSettingsFailure(err, "scheduleMarkerRefresh"));
@@ -233,6 +241,14 @@ function syncRuntime(settings: Settings): void {
     syncActiveChatRow(conversationTokenFromLocation());
   } catch {
     /* DOM lookup must never break the sync apply */
+  }
+
+  // Persistent per-chat sidebar colors rehydrate alongside (saved rows keep
+  // their label even while another conversation is open).
+  if (settings.enabled) {
+    void hydrateSidebarChatColors().catch(() => {
+      /* best-effort paint; next refresh retries */
+    });
   }
 
   lastSettings = settings;
@@ -664,6 +680,11 @@ async function bootstrap(): Promise<void> {
             if (quiesced || !s?.enabled) return;
             const fp = await conversationFingerprintFromLocation();
             await applier.reconcileConversationBackgroundOverride(fp, s);
+            // A reset chat loses its sidebar color immediately; other saved
+            // rows persist (hydrate clears stale markers first, then marks).
+            await hydrateSidebarChatColors().catch(() => {
+              /* best-effort paint; next refresh retries */
+            });
           })();
         }
         return;

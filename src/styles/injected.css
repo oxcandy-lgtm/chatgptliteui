@@ -145,6 +145,31 @@
   background: transparent !important;
 }
 
+/* ---- persistent per-chat sidebar row colors (Phase 4) ------------------
+ * A conversation's saved background stays on its sidebar row even while
+ * another chat is open. Each row owns its color via the element-local
+ * `--cgl-sidebar-chat-bg` (never the root's route-dependent variable), so
+ * no root override class is required and no gate may hide it. Nested
+ * official backgrounds inside ONLY marked rows are neutralized with the
+ * same bounded-surface technique. Text/icons/dimensions/radius/clicks
+ * stay ChatGPT-controlled. Teardown removes markers and variables. */
+[data-cgl-chat-color-surface="true"] {
+  background: var(--cgl-sidebar-chat-bg) !important;
+}
+
+[data-cgl-chat-color-surface="true"] > *,
+[data-cgl-chat-color-surface="true"] > * > * {
+  background-color: transparent !important;
+  background-image: none !important;
+}
+
+[data-cgl-chat-color-surface="true"]::before,
+[data-cgl-chat-color-surface="true"]::after,
+[data-cgl-chat-color-surface="true"] *::before,
+[data-cgl-chat-color-surface="true"] *::after {
+  background: transparent !important;
+}
+
 /* ---- sidebar visibility (Phase 3): guarded, marker-only, non-destructive ----
  * The only permitted mutation on the ChatGPT sidebar is the extension-owned
  * marker `data-cgl-sidebar-target="true"`. Hiding is performed by adding the
