@@ -576,13 +576,12 @@ export interface RegionMetrics {
   renderedArea: number;
 }
 
-function regionMetricsFor(
+export function regionMetricsFor(
   kind: RegionMetrics["kind"],
   el: HTMLElement,
   turnIndex: number,
   blockIndex: number,
-): RegionMetrics {
-  const m: RegionMetrics = {
+): RegionMetrics {  const m: RegionMetrics = {
     kind,
     turnIndex,
     blockIndex,
@@ -626,8 +625,7 @@ function regionMetricsFor(
       m.textChars += (node.textContent ?? "").length;
     } else if (node.nodeType === 1) {
       m.elementCount++;
-      const tag = (node as Element).tagName.toLowerCase();
-      if (tag === "pre") m.preCount++;
+      const tag = (node as Element).tagName.toLowerCase();      if (tag === "pre") m.preCount++;
       else if (tag === "code") m.codeBlockCount++;
       else if (tag === "img") {
         m.imageCount++;
@@ -644,9 +642,32 @@ function regionMetricsFor(
       if ((node as Element).getAttribute("contenteditable") === "true") {
         m.contentEditableCount++;
       }
+      // Directly associated animations only (subtree:false avoids double
+      // counting descendant animations that ancestors would re-report).
+      // Counts only — animation objects are never retained or emitted.
+      m.animationCount += countDirectAnimations(node);
     }
   }
   return m;
+}
+
+/** Number of animations directly associated with one element (count only). */
+function countDirectAnimations(node: Node): number {
+  try {
+    const target = node as unknown as {
+      getAnimations?: (options?: { subtree?: boolean }) => unknown;
+    };
+    if (typeof target.getAnimations !== "function") return 0;
+    let list: unknown = null;
+    try {
+      list = target.getAnimations({ subtree: false });
+    } catch {
+      list = target.getAnimations();
+    }
+    return Array.isArray(list) ? list.length : 0;
+  } catch {
+    return 0;
+  }
 }
 
 export interface RegionRankEntry {

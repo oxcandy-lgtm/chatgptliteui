@@ -4,6 +4,7 @@ import {
   buildPageComparison,
   isMemorySampleRecordSafeForTest,
   rankRegions,
+  regionMetricsFor,
   resourceAggregates,
   sanitizeUaBreakdownEntry,
   scanDocumentStructure,
@@ -208,5 +209,34 @@ describe("memory observatory privacy + bounds", () => {
     expect(cmp.topByNodeCount).toHaveLength(10);
     expect(cmp.topByNodeCount[0]!.nodeCount).toBe(1200);
     expect(cmp.comparisonWarning.length).toBeGreaterThan(0);
+  });
+
+  it("region animation counts drive topByAnimationCount", () => {
+    dom = installDom(
+      `<main><div data-message-author-role="assistant" id="turn-a"><span id="anim-child">x</span></div>` +
+      `<div data-message-author-role="assistant" id="turn-b"><span>plain</span></div></main>`,
+    );
+    const doc = dom.window.document;
+    const animChild = doc.getElementById("anim-child") as unknown as Record<string, unknown>;
+    const seenOptions: unknown[] = [];
+    animChild["getAnimations"] = (options?: unknown) => {
+      seenOptions.push(options);
+      return [{}, {}];
+    };
+    const turnA = doc.getElementById("turn-a") as unknown as HTMLElement;
+    const turnB = doc.getElementById("turn-b") as unknown as HTMLElement;
+    const a = regionMetricsFor("assistant-turn", turnA, 0, -1);
+    const b = regionMetricsFor("assistant-turn", turnB, 1, -1);
+    expect(a.animationCount).toBe(2);
+    expect(b.animationCount).toBe(0);
+    // Direct association only: subtree scoping requested, objects dropped.
+    expect(seenOptions).toEqual([{ subtree: false }]);
+    const rankings = rankRegions([a, b]);
+    expect(rankings.topByAnimationCount).toHaveLength(1);
+    expect(rankings.topByAnimationCount[0]).toMatchObject({
+      kind: "assistant-turn",
+      turnIndex: 0,
+      value: 2,
+    });
   });
 });
