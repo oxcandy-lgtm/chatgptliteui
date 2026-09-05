@@ -4,6 +4,21 @@ import {
   applyAppearancePreset,
   detectAppearancePreset,
 } from "../features/appearance/presets.js";
+import {
+  clearConversationBackground,
+  getConversationBackground,
+  readCurrentConversationFingerprint,
+  setConversationBackground,
+} from "../features/appearance/conversation-background.js";
+import {
+  clearProjectBackground,
+  getProjectBackground,
+  readCurrentProjectFingerprint,
+  setProjectBackground,
+} from "../features/appearance/project-background.js";
+
+/** Default picker value when a chat has no stored override yet. */
+const DEFAULT_CHAT_BACKGROUND = "#101827";
 
 function bind(): void {
   const enabled = document.getElementById("enabled") as HTMLInputElement | null;
@@ -78,7 +93,126 @@ function bind(): void {
           });
       });
     }
+    const writingCopy = document.getElementById("writingCopyEnabled") as HTMLInputElement | null;
+    if (writingCopy) {
+      writingCopy.checked = settings.writingCopy.enabled;
+      writingCopy.addEventListener("change", () => {
+        // Patch ONLY writingCopy.enabled; preserve everything else.
+        void getSettings()
+          .then(() => updateSettings({ writingCopy: { enabled: writingCopy.checked } }))
+          .then(() => {
+            if (status) status.textContent = `Writing copy: ${writingCopy.checked ? "on" : "off"}.`;
+          })
+          .catch(() => {
+            if (status) status.textContent = "Save failed.";
+          });
+      });
+    }
     if (status) status.textContent = "Settings loaded.";
+    void bindChatBackground(status);
+    void bindProjectBackground(status);
+  });
+}
+
+/**
+ * Per-chat background section. Identity comes ONLY from the fingerprint the
+ * content script publishes — the popup never reads tab URLs, titles, or chat
+ * text. Saves apply live via storage (the content script re-applies on
+ * change); no messaging, no new permissions.
+ */
+async function bindChatBackground(
+  status: HTMLParagraphElement | null,
+): Promise<void> {
+  const identity = document.getElementById("chat-identity") as HTMLParagraphElement | null;
+  const enabled = document.getElementById("chatBackgroundEnabled") as HTMLInputElement | null;
+  const picker = document.getElementById("chatBackgroundColor") as HTMLInputElement | null;
+  const reset = document.getElementById("chatBackgroundReset") as HTMLButtonElement | null;
+  if (!identity || !enabled || !picker || !reset) return;
+
+  const setDisabled = (message: string): void => {
+    identity.textContent = message;
+    enabled.disabled = true;
+    picker.disabled = true;
+    reset.disabled = true;
+  };
+
+  let fingerprint: string | null;
+  try {
+    fingerprint = await readCurrentConversationFingerprint();
+  } catch {
+    setDisabled("Could not read chat identity.");
+    return;
+  }
+  if (!fingerprint) {
+    setDisabled("This page has no saved chat identity.");
+    return;
+  }
+
+  let stored: string | null;
+  try {
+    stored = await getConversationBackground(fingerprint);
+  } catch {
+    setDisabled("Could not read chat background.");
+    return;
+  }
+  identity.textContent = stored
+    ? "Custom background saved for this chat."
+    : "No custom background for this chat.";
+  enabled.checked = stored !== null;
+  picker.value = stored ?? DEFAULT_CHAT_BACKGROUND;
+  picker.disabled = !enabled.checked;
+
+  const save = (): void => {
+    if (!enabled.checked) return;
+    const color = picker.value;
+    void setConversationBackground(fingerprint, color)
+      .then((ok) => {
+        identity.textContent = ok
+          ? "Custom background saved for this chat."
+          : "Save failed.";
+        if (status && ok) status.textContent = "Chat background saved.";
+      })
+      .catch(() => {
+        identity.textContent = "Save failed.";
+      });
+  };
+
+  enabled.addEventListener("change", () => {
+    picker.disabled = !enabled.checked;
+    if (!enabled.checked) {
+      // Unchecking removes the override (falls back to global/official).
+      // Success UI only after a real successful delete.
+      void clearConversationBackground(fingerprint)
+        .then((ok) => {
+          identity.textContent = ok
+            ? "No custom background for this chat."
+            : "Reset failed.";
+        })
+        .catch(() => {
+          identity.textContent = "Reset failed.";
+        });
+    } else {
+      save();
+    }
+  });
+  // Live update while picking; the open ChatGPT page follows via storage.
+  picker.addEventListener("input", save);
+  reset.addEventListener("click", () => {
+    void clearConversationBackground(fingerprint)
+      .then((ok) => {
+        if (!ok) {
+          identity.textContent = "Reset failed.";
+          return;
+        }
+        enabled.checked = false;
+        picker.disabled = true;
+        picker.value = DEFAULT_CHAT_BACKGROUND;
+        identity.textContent = "No custom background for this chat.";
+        if (status) status.textContent = "Chat background reset.";
+      })
+      .catch(() => {
+        identity.textContent = "Reset failed.";
+      });
   });
 }
 
@@ -88,4 +222,106 @@ if (typeof document !== "undefined") {
   } else {
     bind();
   }
+}
+
+/**
+ * Per-project background section. Identity comes ONLY from the project
+ * fingerprint the content script publishes — never tab URLs, titles, or
+ * raw IDs. Shown/enabled only inside a Project chat; saves apply live via
+ * storage. Explicit chat colors always win over the project color.
+ */
+async function bindProjectBackground(
+  status: HTMLParagraphElement | null,
+): Promise<void> {
+  const identity = document.getElementById("project-identity") as HTMLParagraphElement | null;
+  const enabled = document.getElementById("projectBackgroundEnabled") as HTMLInputElement | null;
+  const picker = document.getElementById("projectBackgroundColor") as HTMLInputElement | null;
+  const reset = document.getElementById("projectBackgroundReset") as HTMLButtonElement | null;
+  if (!identity || !enabled || !picker || !reset) return;
+
+  const setDisabled = (message: string): void => {
+    identity.textContent = message;
+    enabled.disabled = true;
+    picker.disabled = true;
+    reset.disabled = true;
+  };
+
+  let fingerprint: string | null;
+  try {
+    fingerprint = await readCurrentProjectFingerprint();
+  } catch {
+    setDisabled("Could not read project identity.");
+    return;
+  }
+  if (!fingerprint) {
+    setDisabled("This chat is not in a project.");
+    return;
+  }
+
+  let stored: string | null;
+  try {
+    stored = await getProjectBackground(fingerprint);
+  } catch {
+    setDisabled("Could not read project background.");
+    return;
+  }
+  identity.textContent = stored
+    ? "Custom background saved for this project."
+    : "No custom background for this project.";
+  enabled.checked = stored !== null;
+  picker.value = stored ?? DEFAULT_CHAT_BACKGROUND;
+  picker.disabled = !enabled.checked;
+
+  const save = (): void => {
+    if (!enabled.checked) return;
+    const color = picker.value;
+    void setProjectBackground(fingerprint, color)
+      .then((ok) => {
+        identity.textContent = ok
+          ? "Custom background saved for this project."
+          : "Save failed.";
+        if (status && ok) status.textContent = "Project background saved.";
+      })
+      .catch(() => {
+        identity.textContent = "Save failed.";
+      });
+  };
+
+  enabled.addEventListener("change", () => {
+    picker.disabled = !enabled.checked;
+    if (!enabled.checked) {
+      // Unchecking removes the project override (explicit chat colors
+      // remain; inherited rows fall back to global/official).
+      void clearProjectBackground(fingerprint)
+        .then((ok) => {
+          identity.textContent = ok
+            ? "No custom background for this project."
+            : "Reset failed.";
+        })
+        .catch(() => {
+          identity.textContent = "Reset failed.";
+        });
+    } else {
+      save();
+    }
+  });
+  // Live update while picking; open pages follow via storage.
+  picker.addEventListener("input", save);
+  reset.addEventListener("click", () => {
+    void clearProjectBackground(fingerprint)
+      .then((ok) => {
+        if (!ok) {
+          identity.textContent = "Reset failed.";
+          return;
+        }
+        enabled.checked = false;
+        picker.disabled = true;
+        picker.value = DEFAULT_CHAT_BACKGROUND;
+        identity.textContent = "No custom background for this project.";
+        if (status) status.textContent = "Project background reset.";
+      })
+      .catch(() => {
+        identity.textContent = "Reset failed.";
+      });
+  });
 }

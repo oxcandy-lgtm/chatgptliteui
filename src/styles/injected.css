@@ -93,6 +93,105 @@
   color: var(--cgl-text);
 }
 
+/* ---- per-conversation background override (Phase 4) --------------------
+ * A single chat's remembered background wins over the global theme and the
+ * official background, without touching global settings or any other
+ * surface (user/assistant turns, composer, code, WritingBlock, pulse,
+ * copied marker). Placed after the theme rules so equal-specificity ties
+ * resolve to the override. `restore()` removes the class and variables. */
+:root.cgl-chat-bg-override {
+  background-color: var(--cgl-page-bg);
+}
+:root.cgl-chat-bg-override body {
+  background-color: var(--cgl-page-bg);
+}
+:root.cgl-chat-bg-override [data-cgl-conversation-root] {
+  background-color: var(--cgl-conversation-bg);
+}
+
+/* ---- active sidebar chat row (Phase 4) ---------------------------------
+ * The selected conversation anchor shares the current per-chat background
+ * exactly (same variable, no second preference, no opacity transform).
+ * The official selected rounded paint lives on the clickable anchor, so
+ * the marker — and this override, strong enough to beat the official
+ * selected background — targets the anchor itself. Text/icon colors,
+ * radius, padding, height, and layout stay ChatGPT-controlled. Without a
+ * per-chat override the class is absent and the official highlight shows. */
+:root.cgl-chat-bg-override a[data-cgl-active-chat-row="true"] {
+  background-color: var(--cgl-conversation-bg) !important;
+}
+
+/* ---- active sidebar row force-paint (Phase 4) --------------------------
+ * The official selected gray may live on another layer inside/around the
+ * row, so the bounded surface takes the full background shorthand (killing
+ * any official gradient/image layer) while nested selected backgrounds
+ * inside ONLY this marked row are neutralized. Scoped strictly to the one
+ * marked surface — never the whole sidebar. Reset removes the markers and
+ * the official gray returns naturally. */
+:root.cgl-chat-bg-override [data-cgl-active-chat-surface="true"] {
+  background: var(--cgl-conversation-bg) !important;
+}
+
+:root.cgl-chat-bg-override [data-cgl-active-chat-surface="true"] > *,
+:root.cgl-chat-bg-override [data-cgl-active-chat-surface="true"] > * > * {
+  background-color: transparent !important;
+  background-image: none !important;
+}
+
+:root.cgl-chat-bg-override [data-cgl-active-chat-surface="true"]::before,
+:root.cgl-chat-bg-override [data-cgl-active-chat-surface="true"]::after,
+:root.cgl-chat-bg-override [data-cgl-active-chat-surface="true"] *::before,
+:root.cgl-chat-bg-override [data-cgl-active-chat-surface="true"] *::after {
+  background: transparent !important;
+}
+
+/* ---- persistent per-chat sidebar row colors (Phase 4) ------------------
+ * A conversation's saved background stays on its sidebar row even while
+ * another chat is open. Each row owns its color via the element-local
+ * `--cgl-sidebar-chat-bg` (never the root's route-dependent variable), so
+ * no root override class is required and no gate may hide it. Nested
+ * official backgrounds inside ONLY marked rows are neutralized with the
+ * same bounded-surface technique. Text/icons/dimensions/radius/clicks
+ * stay ChatGPT-controlled. Teardown removes markers and variables. */
+[data-cgl-chat-color-surface="true"] {
+  background: var(--cgl-sidebar-chat-bg) !important;
+}
+
+[data-cgl-chat-color-surface="true"] > *,
+[data-cgl-chat-color-surface="true"] > * > * {
+  background-color: transparent !important;
+  background-image: none !important;
+}
+
+[data-cgl-chat-color-surface="true"]::before,
+[data-cgl-chat-color-surface="true"]::after,
+[data-cgl-chat-color-surface="true"] *::before,
+[data-cgl-chat-color-surface="true"] *::after {
+  background: transparent !important;
+}
+
+/* ---- project folder row colors (Phase 4) --------------------------------
+ * Same bounded-surface technique as persistent chat rows: the project
+ * folder owns its element-local color, nested official backgrounds inside
+ * ONLY the marked folder are neutralized, and everything else stays
+ * ChatGPT-controlled. Teardown removes markers and variables. */
+[data-cgl-project-color-surface="true"] {
+  background: var(--cgl-project-bg) !important;
+}
+
+[data-cgl-project-color-surface="true"] > *,
+[data-cgl-project-color-surface="true"] > * > * {
+  background-color: transparent !important;
+  background-image: none !important;
+}
+
+[data-cgl-project-color-surface="true"]::before,
+[data-cgl-project-color-surface="true"]::after,
+[data-cgl-project-color-surface="true"] *::before,
+[data-cgl-project-color-surface="true"] *::after {
+  background: transparent !important;
+}
+
 /* ---- sidebar visibility (Phase 3): guarded, marker-only, non-destructive ----
  * The only permitted mutation on the ChatGPT sidebar is the extension-owned
  * marker `data-cgl-sidebar-target="true"`. Hiding is performed by adding the
@@ -101,4 +200,241 @@
  * position/transform/z-index on the ChatGPT sidebar, and no animations. */
 :root.cgl-sidebar-closed [data-cgl-sidebar-target] {
   display: none !important;
+}
+
+/* ---- writing-block background (Phase 4): guarded, marker-only ------------
+ * Applied ONLY when writingCopy is enabled AND backgroundEnabled is on —
+ * independently of the general custom theme. Scoped strictly to the safely
+ * detected writing block (marked `data-cgl-writing-block`), never to entire
+ * Assistant turns, code blocks, dialogs, composer, sidebar, or low-confidence
+ * candidates. The CSS variable is removed on restoration (the
+ * `cgl-writing-copy-active` class is toggled off by the controller). */
+:root.cgl-writing-copy-active [data-cgl-writing-block] {
+  background-color: var(--cgl-writing-bg);
+}
+
+/* The resolved whole-card surface shares the optional static background so
+ * the card reads as one surface whether or not the pulse is running. When
+ * the background setting is off the variable is unset and this rule paints
+ * nothing. */
+:root.cgl-writing-copy-active [data-cgl-writing-surface] {
+  background-color: var(--cgl-writing-bg);
+}
+
+/* ---- copied text marker (Phase 4): CSS Custom Highlight API --------------
+ * `::highlight(cgl-copied)` paints the live Ranges of currently COPIED
+ * WritingBlocks. No spans are created and no ChatGPT DOM is rewritten.
+ * Guarded by the extension-owned root classes; appearance comes entirely
+ * from global presentation variables (never per-record). */
+:root.cgl-writing-marker-on ::highlight(cgl-copied) {
+  background-color: var(--cgl-copy-marker-color);
+  opacity: var(--cgl-copy-marker-opacity);
+  text-decoration: underline;
+  text-decoration-color: var(--cgl-copy-marker-color);
+  text-underline-offset: 3px;
+}
+
+/* ---- uncopied pulse (Phase 4): slow CSS-animation-only background --------
+ * Only UNCOPIED WritingBlocks that are CURRENTLY VISIBLE (extension-owned
+ * `data-cgl-writing-visible` marker from the shared IntersectionObserver)
+ * animate. COPIED blocks never pulse. One animation, no per-block timers,
+ * no JS loop.
+ * Fallback scope: editors already covered by a resolved whole-card surface
+ * are excluded here (the surface overlay below owns ALL pulse paint, so the
+ * editor area never receives a double layer). */
+:root.cgl-writing-pulse-on [data-cgl-writing-block][data-cgl-writing-copy-state="uncopied"][data-cgl-writing-visible]:not([data-cgl-writing-surface] *) {
+  animation: cgl-writing-pulse var(--cgl-pulse-period) ease-in-out infinite;
+}
+
+/* ---- whole-card surface pulse (Phase 4): SINGLE uniform layer ---------
+ * The uncopied pulse paints the resolved whole WritingBlock card (header +
+ * editor background) as ONE layer through a surface ::after overlay, driven
+ * purely by the editor's existing semantic state and visibility markers via
+ * :has() — no extra JS state, no timers, no wrapper nodes, no content edits.
+ * A plain background-color on the surface would be masked by opaque ChatGPT
+ * descendant backgrounds (header/tool area); the overlay sits above card
+ * descendants (pointer-events:none, so Edit/Copy/expand stay interactive)
+ * while staying below real popups. Opacity animates 0 -> 1 -> 0, so the
+ * underlying configured background is never destroyed.
+ * COPIED editors never match :has(), so the overlay stops on copy;
+ * offscreen editors lose their visible marker, so no pulse work happens
+ * offscreen. The editor rule above is the fail-closed fallback for blocks
+ * whose surface could not be resolved. */
+:root.cgl-writing-pulse-on [data-cgl-writing-surface]:has([data-cgl-writing-block][data-cgl-writing-copy-state="uncopied"][data-cgl-writing-visible]) {
+  position: relative;
+}
+
+:root.cgl-writing-pulse-on [data-cgl-writing-surface]:has([data-cgl-writing-block][data-cgl-writing-copy-state="uncopied"][data-cgl-writing-visible])::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 1;
+  background-color: color-mix(
+    in srgb,
+    var(--cgl-pulse-color) calc(var(--cgl-pulse-intensity) * 100%),
+    transparent
+  );
+  animation: cgl-surface-pulse var(--cgl-pulse-period) ease-in-out infinite;
+}
+
+@keyframes cgl-surface-pulse {
+  0%,
+  100% {
+    opacity: 0;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes cgl-writing-pulse {
+  0%,
+  100% {
+    background-color: var(--cgl-writing-bg, transparent);
+  }
+  50% {
+    background-color: color-mix(
+      in srgb,
+      var(--cgl-pulse-color) calc(var(--cgl-pulse-intensity) * 100%),
+      transparent
+    );
+  }
+}
+
+/* COPIED blocks must never pulse, even if a stale visible marker remains. */
+:root.cgl-writing-pulse-on [data-cgl-writing-block][data-cgl-writing-copy-state="copied"] {
+  animation: none;
+}
+
+/* ---- reduced motion: static high-visibility fallback ---------------------
+ * Honors BOTH ChatGPTLiteUI's own animation-reduction toggle and the OS-level
+ * preference. The pulse stops and UNCOPIED blocks keep a static tint instead;
+ * the copied marker itself is static and remains untouched by these rules. */
+:root.cgl-no-anim.cgl-writing-pulse-on [data-cgl-writing-block][data-cgl-writing-copy-state="uncopied"]:not([data-cgl-writing-surface] *),
+:root.cgl-no-anim.cgl-writing-pulse-on [data-cgl-writing-block][data-cgl-writing-copy-state="uncopied"][data-cgl-writing-visible]:not([data-cgl-writing-surface] *) {
+  animation: none !important;
+  background-color: color-mix(
+    in srgb,
+    var(--cgl-pulse-color) calc(var(--cgl-pulse-intensity) * 50%),
+    transparent
+  );
+}
+
+:root.cgl-no-anim.cgl-writing-pulse-on [data-cgl-writing-surface]:has([data-cgl-writing-block][data-cgl-writing-copy-state="uncopied"]),
+:root.cgl-no-anim.cgl-writing-pulse-on [data-cgl-writing-surface]:has([data-cgl-writing-block][data-cgl-writing-copy-state="uncopied"][data-cgl-writing-visible]) {
+  position: relative;
+}
+
+:root.cgl-no-anim.cgl-writing-pulse-on [data-cgl-writing-surface]:has([data-cgl-writing-block][data-cgl-writing-copy-state="uncopied"])::after,
+:root.cgl-no-anim.cgl-writing-pulse-on [data-cgl-writing-surface]:has([data-cgl-writing-block][data-cgl-writing-copy-state="uncopied"][data-cgl-writing-visible])::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 1;
+  background-color: color-mix(
+    in srgb,
+    var(--cgl-pulse-color) calc(var(--cgl-pulse-intensity) * 100%),
+    transparent
+  );
+  opacity: 0.5;
+  animation: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root.cgl-writing-pulse-on [data-cgl-writing-block][data-cgl-writing-copy-state="uncopied"]:not([data-cgl-writing-surface] *) {
+    animation: none !important;
+    background-color: color-mix(
+      in srgb,
+      var(--cgl-pulse-color) calc(var(--cgl-pulse-intensity) * 50%),
+      transparent
+    );
+  }
+  :root.cgl-writing-pulse-on [data-cgl-writing-surface]:has([data-cgl-writing-block][data-cgl-writing-copy-state="uncopied"]) {
+    position: relative;
+  }
+  :root.cgl-writing-pulse-on [data-cgl-writing-surface]:has([data-cgl-writing-block][data-cgl-writing-copy-state="uncopied"])::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    z-index: 1;
+    background-color: color-mix(
+      in srgb,
+      var(--cgl-pulse-color) calc(var(--cgl-pulse-intensity) * 100%),
+      transparent
+    );
+    opacity: 0.5;
+    animation: none !important;
+  }
+}
+
+/* ---- Phase 5 folding: presentation-only clipping -----------------------
+ * Extension-owned fold markers clip long code blocks / long responses with
+ * max-height + overflow only. Original DOM, text, and controls are never
+ * touched; teardown removes every marker. Fold controls live in an
+ * extension-owned Shadow host. */
+[data-cgl-code-folded="true"] {
+  max-height: 260px !important;
+  overflow: hidden !important;
+}
+
+[data-cgl-response-folded="true"] {
+  max-height: 420px !important;
+  overflow: hidden !important;
+}
+
+/* ---- CGL X-RAY diagnostic paint (maintenance port) ------------------------
+ * TEMPORARY extension-owned diagnostics. Every rule is guarded by the
+ * `cgl-xray-on` root class, which exists ONLY while X-Ray is active; closing
+ * X-Ray removes the class AND every data-cgl-xray-* attribute, so all paint
+ * disappears completely and the official UI is untouched. Colors:
+ * BLUE=Assistant turn, CYAN=conversation/root, YELLOW=raw candidate,
+ * GREEN=safe WritingBlock, RED=rejected candidate, PURPLE=editable,
+ * ORANGE=Copy/Edit/action control, MAGENTA=picked target. */
+
+:root.cgl-xray-on [data-cgl-xray-conversation] {
+  outline: 3px dashed cyan;
+  outline-offset: -3px;
+}
+
+:root.cgl-xray-on [data-cgl-xray-assistant-turn] {
+  outline: 2px solid #4c8dff;
+  outline-offset: -2px;
+}
+
+:root.cgl-xray-on [data-cgl-xray-raw-candidate] {
+  outline: 2px solid #ffd166;
+  background-color: rgba(255, 209, 102, 0.12);
+}
+
+:root.cgl-xray-on [data-cgl-xray-safe-block] {
+  outline: 3px solid #35d07f;
+  outline-offset: -1px;
+  background-color: rgba(53, 208, 127, 0.14);
+}
+
+:root.cgl-xray-on [data-cgl-xray-rejected] {
+  outline: 2px dotted #ff5c5c;
+  background-color: rgba(255, 92, 92, 0.1);
+}
+
+:root.cgl-xray-on [data-cgl-xray-editable] {
+  outline: 2px solid #b28dff;
+  background-color: rgba(178, 141, 255, 0.12);
+}
+
+:root.cgl-xray-on [data-cgl-xray-action] {
+  outline: 2px solid #ff9f43;
+  outline-offset: -1px;
+}
+
+:root.cgl-xray-on [data-cgl-xray-picked] {
+  outline: 4px solid magenta !important;
+  outline-offset: -2px;
+  background-color: rgba(255, 0, 255, 0.15);
 }

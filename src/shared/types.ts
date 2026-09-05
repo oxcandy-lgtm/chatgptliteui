@@ -21,8 +21,13 @@ export type SidebarMode = "visible" | "hover" | "button" | "hidden";
 /** History limiting strategy (deferred feature; preserved for forward-compat). */
 export type HistoryMode = "safe" | "aggressive";
 
-/** Position for the floating copy button (deferred feature). */
-export type CopyPosition = "top-right" | "middle-right" | "bottom-right";
+/**
+ * Position for the floating copy button.
+ * `smart` computes geometry per active block (outside-right preferred,
+ * inside-right fallback, viewport-clamped); the other three are fixed
+ * legacy placements preserved for existing explicit user choices.
+ */
+export type CopyPosition = "smart" | "top-right" | "middle-right" | "bottom-right";
 
 /** A normalized `Color` value. Only these shapes are accepted. */
 export type Color = string;
@@ -72,11 +77,27 @@ export interface Settings {
     visiblePairs: number;
     mode: HistoryMode;
   };
-  /** Deferred feature; preserved for forward-compatibility only. */
+  /** Writing Copy / CopyMarker feature (Phase 4). */
   writingCopy: {
     enabled: boolean;
     position: CopyPosition;
     shortcutEnabled: boolean;
+    /** Render a colored marker over the text of COPIED blocks. */
+    markerEnabled: boolean;
+    /** Marker color (conservative hex grammar). */
+    markerColor: Color;
+    /** Integer percentage 0–100. */
+    markerOpacity: number;
+    /** Slow background pulse on UNCOPIED blocks. */
+    pulseEnabled: boolean;
+    /** Pulse color (conservative hex grammar). */
+    pulseColor: Color;
+    /** Integer percentage 0–100. */
+    pulseIntensity: number;
+    /** Pulse period in ms, bounded slow range. */
+    pulsePeriodMs: number;
+    /** Apply the configured writing-block background independently of theme. */
+    backgroundEnabled: boolean;
   };
   /** Deferred feature; preserved for forward-compatibility only. */
   codeBlocks: {
@@ -103,7 +124,7 @@ export interface StoredSettingsEnvelope {
 }
 
 /** Current persisted schema version. */
-export const SETTINGS_SCHEMA_VERSION = 2;
+export const SETTINGS_SCHEMA_VERSION = 3;
 
 /** Chrome storage key for the settings envelope. */
 export const SETTINGS_STORAGE_KEY = "settings";
@@ -112,6 +133,9 @@ export const SETTINGS_STORAGE_KEY = "settings";
 export const NUMBER_BOUNDS = {
   conversationWidth: { min: 480, max: 1600 },
   fontSize: { min: 12, max: 24 },
+  markerOpacity: { min: 0, max: 100 },
+  pulseIntensity: { min: 0, max: 100 },
+  pulsePeriodMs: { min: 1000, max: 10000 },
 } as const;
 
 /**

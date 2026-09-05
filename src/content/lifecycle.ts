@@ -3,6 +3,7 @@ import { createAdapter } from "../adapters/chatgpt-adapter.js";
 import {
   AppearanceController,
   createDebouncedApply,
+  type AppearanceApplyOptions,
 } from "../features/appearance/appearance-controller.js";
 
 /**
@@ -24,13 +25,30 @@ export class ThemeApplier {
     this.controller = new AppearanceController(root, createAdapter());
   }
 
-  apply(settings: Settings): void {
-    this.controller.apply(settings);
+  apply(settings: Settings, options: AppearanceApplyOptions = {}): void {
+    this.controller.apply(settings, options);
   }
 
   /** Refresh surface markers for new turns without touching classes/vars. */
   refreshMarkers(settings: Settings): void {
     this.controller.refreshMarkers(settings);
+  }
+
+  /**
+   * Reconcile the stored per-conversation background override (clear stale
+   * override, restore global/official fallback, apply resolved chat-or-
+   * project color when present). Call only while the extension is enabled.
+   */
+  reconcileConversationBackgroundOverride(
+    conversationFp: string | null,
+    projectFp: string | null,
+    settings: Settings,
+  ): Promise<void> {
+    return this.controller.reconcileConversationBackgroundOverride(
+      conversationFp,
+      projectFp,
+      settings,
+    );
   }
 
   /** Fully restore the original page appearance. */

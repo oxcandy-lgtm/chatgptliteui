@@ -9,6 +9,9 @@ import {
   hasAppearanceEffects,
   isSafeCosmeticDetection,
 } from "./presets.js";
+import { resolveChatBackground } from "./project-background.js";
+import { clearActiveChatRowMarkers } from "./active-chat-row.js";
+import { clearSidebarChatColorMarkers } from "./sidebar-chat-colors.js";
 import type { ChatGptAdapter } from "../../adapters/chatgpt-adapter.js";
 
 /**
@@ -27,6 +30,19 @@ import type { ChatGptAdapter } from "../../adapters/chatgpt-adapter.js";
  * consumed by `content.css` under the `cgl-active` guard.
  */
 
+/** Options for a route-transition apply that must not flash paint. */
+export interface AppearanceApplyOptions {
+  /**
+   * When true, the currently committed resolved main background
+   * (`cgl-chat-bg-override` + page/conversation vars) is held untouched
+   * until the async destination reconcile commits — the theme apply must
+   * not overwrite those two vars first, and the volatile reset must not
+   * remove them. Consumed once per route transition only; normal settings
+   * changes always reconcile immediately.
+   */
+  preserveResolvedBackground?: boolean;
+}
+
 const CGL_CLASSES = [
   "cgl-active",
   "cgl-no-anim",
@@ -36,6 +52,7 @@ const CGL_CLASSES = [
   "cgl-width",
   "cgl-font",
   "cgl-theme",
+  "cgl-chat-bg-override",
 ] as const;
 
 const CGL_VARS = [
@@ -56,6 +73,11 @@ export class AppearanceController {
   private readonly adapter: ChatGptAdapter;
   /** Elements marked in the most recent apply; released on teardown. */
   private marked: Element[] = [];
+  /**
+   * Background reconcile generation: rapid route changes invalidate older
+   * in-flight resolutions so only the latest route commits paint.
+   */
+  private bgReconcileEpoch = 0;
 
   constructor(root: HTMLElement, adapter: ChatGptAdapter) {
     this.root = root;
@@ -124,12 +146,22 @@ export class AppearanceController {
 
   /**
    * Apply appearance settings.
-   * A complete no-op (no root class, no markers, no variables) when the
-   * extension is disabled or when no appearance effect is active (e.g. Normal).
+   * Full teardown-grade restore when disabled; otherwise a volatile-only
+   * reset that PRESERVES persistent sidebar chat/project color markers so
+   * route/settings re-applies never flash them to official and back. With
+   * `preserveResolvedBackground` (route transition only), the currently
+   * committed resolved main background is additionally held untouched
+   * until the async destination reconcile commits — the theme apply skips
+   * its page/conversation writes in that window while every other theme
+   * variable updates normally.
    */
-  apply(settings: Settings): void {
-    this.restore();
-    if (!settings.enabled) return;
+  apply(settings: Settings, options: AppearanceApplyOptions = {}): void {
+    if (!settings.enabled) {
+      this.restore();
+      return;
+    }
+    const hold = options.preserveResolvedBackground === true;
+    this.restoreVolatile(hold);
     if (!hasAppearanceEffects(settings)) return;
 
     this.root.classList.add("cgl-active");
@@ -154,8 +186,13 @@ export class AppearanceController {
     }
     if (a.useTheme) {
       const t = settings.theme;
-      this.root.style.setProperty("--cgl-page-bg", t.pageBackground);
-      this.root.style.setProperty("--cgl-conversation-bg", t.conversationBackground);
+      if (!hold) {
+        // Route hold: leave the committed page/conversation background
+        // painted until the destination reconcile commits (other theme
+        // variables still update normally below).
+        this.root.style.setProperty("--cgl-page-bg", t.pageBackground);
+        this.root.style.setProperty("--cgl-conversation-bg", t.conversationBackground);
+      }
       this.root.style.setProperty("--cgl-user-bg", t.userBackground);
       this.root.style.setProperty("--cgl-assistant-bg", t.assistantBackground);
       this.root.style.setProperty("--cgl-input-bg", t.inputBackground);
@@ -170,15 +207,94 @@ export class AppearanceController {
   }
 
   /**
+   * Reconcile the per-conversation background override. Resolution order:
+   * explicit chat color, else project color, else the global/official
+   * fallback. ATOMIC commit: the destination is fully resolved FIRST while
+   * the previous valid background stays painted; only then is one final
+   * state committed synchronously — never an intermediate cleared state.
+   * A reconcile generation guard drops stale route results (rapid A→B
+   * navigation ignores A's late answer). Overrides ONLY the
+   * page/conversation background variables — never user/assistant/code/
+   * writing/pulse/marker values and never global theme settings.
+   */
+  async reconcileConversationBackgroundOverride(
+    conversationFp: string | null,
+    projectFp: string | null,
+    settings: Settings,
+  ): Promise<void> {
+    const epoch = ++this.bgReconcileEpoch;
+    const background =
+      conversationFp || projectFp
+        ? await resolveChatBackground(conversationFp, projectFp)
+        : null;
+    if (epoch !== this.bgReconcileEpoch) return;
+    this.root.classList.remove("cgl-chat-bg-override");
+    if (
+      settings.enabled &&
+      settings.appearance &&
+      settings.appearance.useTheme
+    ) {
+      this.root.style.setProperty(
+        "--cgl-page-bg",
+        settings.theme.pageBackground,
+      );
+      this.root.style.setProperty(
+        "--cgl-conversation-bg",
+        settings.theme.conversationBackground,
+      );
+    } else {
+      this.root.style.removeProperty("--cgl-page-bg");
+      this.root.style.removeProperty("--cgl-conversation-bg");
+    }
+    if (!background) return;
+    this.root.classList.add("cgl-chat-bg-override");
+    this.root.style.setProperty("--cgl-page-bg", background);
+    this.root.style.setProperty("--cgl-conversation-bg", background);
+  }
+
+  /**
    * Completely restore the official ChatGPT UI. Removes every extension-owned
-   * class, inline `--cgl-*` custom property, and `data-cgl-*` marker. Idempotent.
+   * class, inline `--cgl-*` custom property, and `data-cgl-*` marker,
+   * INCLUDING persistent sidebar color state. Idempotent. Used by disable /
+   * teardown paths only — normal apply/route paths use `restoreVolatile()`
+   * so colors survive without flashing.
    */
   restore(): void {
-    for (const cls of CGL_CLASSES) this.root.classList.remove(cls);
-    for (const v of CGL_VARS) this.root.style.removeProperty(v);
+    this.restoreVolatile();
+    clearSidebarChatColorMarkers(document);
+    this.bgReconcileEpoch++;
+  }
+
+  /**
+   * Volatile-only reset for normal settings/route applies: root classes,
+   * root variables, appearance surface markers, and active-chat markers.
+   * Persistent sidebar chat/project color markers and their element-local
+   * variables are PRESERVED (reconciled separately). With
+   * `preserveResolvedBackground`, the committed resolved main background
+   * (`cgl-chat-bg-override` + page/conversation vars) is additionally held
+   * for the route transition window. Idempotent.
+   */
+  restoreVolatile(preserveResolvedBackground = false): void {
+    for (const cls of CGL_CLASSES) {
+      if (preserveResolvedBackground && cls === "cgl-chat-bg-override") {
+        continue;
+      }
+      this.root.classList.remove(cls);
+    }
+    for (const v of CGL_VARS) {
+      if (
+        preserveResolvedBackground &&
+        (v === "--cgl-page-bg" || v === "--cgl-conversation-bg")
+      ) {
+        continue;
+      }
+      this.root.style.removeProperty(v);
+    }
     // Release references to avoid retaining detached nodes.
     this.marked = [];
     clearAllMarkers(document);
+    clearActiveChatRowMarkers(document);
+    this.bgReconcileEpoch++;
   }
 }
 

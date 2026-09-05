@@ -25,7 +25,7 @@ describe("ThemeApplier", () => {
       appearance: { disableAnimations: true, disableBlur: false, disableShadows: false, compactSpacing: true, useConversationWidth: true, conversationWidth: 800, useFontSize: true, fontSize: 15, useTheme: true },
       sidebar: { mode: "visible" },
       history: { enabled: false, visiblePairs: 20, mode: "safe" },
-      writingCopy: { enabled: false, position: "middle-right", shortcutEnabled: true },
+      writingCopy: { enabled: false, position: "smart", shortcutEnabled: true, markerEnabled: true, markerColor: "#4c8dff", markerOpacity: 30, pulseEnabled: true, pulseColor: "#4c8dff", pulseIntensity: 18, pulsePeriodMs: 4000, backgroundEnabled: false },
       codeBlocks: { autoCollapse: false, collapseAfterLines: 40 },
       theme: { pageBackground: "#101010", conversationBackground: "#111111", userBackground: "#222222", assistantBackground: "transparent", inputBackground: "#333333", codeBackground: "#444444", writingBlockBackground: "#555555", textColor: "#eeeeee" },
     } as never);
@@ -49,7 +49,7 @@ describe("ThemeApplier", () => {
       appearance: { disableAnimations: true, disableBlur: false, disableShadows: false, compactSpacing: true, useConversationWidth: false, conversationWidth: 800, useFontSize: false, fontSize: 15, useTheme: false },
       sidebar: { mode: "visible" },
       history: { enabled: false, visiblePairs: 20, mode: "safe" },
-      writingCopy: { enabled: false, position: "middle-right", shortcutEnabled: true },
+      writingCopy: { enabled: false, position: "smart", shortcutEnabled: true, markerEnabled: true, markerColor: "#4c8dff", markerOpacity: 30, pulseEnabled: true, pulseColor: "#4c8dff", pulseIntensity: 18, pulsePeriodMs: 4000, backgroundEnabled: false },
       codeBlocks: { autoCollapse: false, collapseAfterLines: 40 },
       theme: { pageBackground: "#101010", conversationBackground: "#111111", userBackground: "#222222", assistantBackground: "transparent", inputBackground: "#333333", codeBackground: "#444444", writingBlockBackground: "#555555", textColor: "#eeeeee" },
     } as never);
@@ -67,7 +67,7 @@ describe("ThemeApplier", () => {
       appearance: { disableAnimations: false, disableBlur: false, disableShadows: false, compactSpacing: false, useConversationWidth: false, conversationWidth: 768, useFontSize: false, fontSize: 16, useTheme: false },
       sidebar: { mode: "visible" },
       history: { enabled: false, visiblePairs: 20, mode: "safe" },
-      writingCopy: { enabled: false, position: "middle-right", shortcutEnabled: true },
+      writingCopy: { enabled: false, position: "smart", shortcutEnabled: true, markerEnabled: true, markerColor: "#4c8dff", markerOpacity: 30, pulseEnabled: true, pulseColor: "#4c8dff", pulseIntensity: 18, pulsePeriodMs: 4000, backgroundEnabled: false },
       codeBlocks: { autoCollapse: false, collapseAfterLines: 40 },
       theme: { pageBackground: "#101010", conversationBackground: "#111111", userBackground: "#222222", assistantBackground: "transparent", inputBackground: "#333333", codeBackground: "#444444", writingBlockBackground: "#555555", textColor: "#eeeeee" },
     } as never);

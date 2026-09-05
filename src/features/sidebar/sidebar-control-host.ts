@@ -1,4 +1,5 @@
 import { SIDEBAR_HOST_ID } from "./sidebar-detection.js";
+import { stampBootId } from "../../shared/runtime-health.js";
 
 /**
  * Extension-owned control host (Shadow DOM).
@@ -134,6 +135,7 @@ export class SidebarControlHost {
     };
     document.addEventListener("keydown", this.keyHandler);
 
+    stampBootId(host);
     document.body.appendChild(host);
   }
 

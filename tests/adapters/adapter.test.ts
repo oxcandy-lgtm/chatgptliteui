@@ -26,12 +26,14 @@ describe("ChatGptAdapter (synthetic fixture)", () => {
     const g = globalThis as unknown as Record<string, unknown>;
     g.window = dom.window;
     g.document = dom.window.document;
+    g.HTMLElement = dom.window.HTMLElement;
   });
 
   afterEach(() => {
     const g = globalThis as unknown as Record<string, unknown>;
     delete g.window;
     delete g.document;
+    delete g.HTMLElement;
     delete g.navigator;
   });
 
@@ -60,7 +62,27 @@ describe("ChatGptAdapter (synthetic fixture)", () => {
     const adapter = new DefaultChatGptAdapter();
     const container = adapter.detectConversationContainer().element!;
     expect(adapter.detectCodeBlocks(container).elements.length).toBe(1);
-    expect(adapter.detectWritingBlocks(container).elements.length).toBeGreaterThan(0);
+    // Bare Assistant <p>s are diagnostic-only now: they must NOT satisfy
+    // production writing-block detection.
+    expect(adapter.detectWritingBlocks(container).found).toBe(false);
+  });
+
+  it("detectWritingBlocks pairs WritingBlock anchors to their unique editors", () => {
+    const doc = dom.window.document;
+    const turn = doc.querySelector('[data-message-author-role="assistant"]')!;
+    const region = doc.createElement("div");
+    region.innerHTML =
+      '<button data-testid="writing-block-header-magic-edit-button"></button>' +
+      '<div contenteditable="true"><p>editor payload</p></div>';
+    turn.appendChild(region);
+    const adapter = new DefaultChatGptAdapter();
+    const container = adapter.detectConversationContainer().element!;
+    const result = adapter.detectWritingBlocks(container);
+    expect(result.found).toBe(true);
+    expect(result.confidence).toBe("high");
+    expect(result.strategy).toBe("writing-block-editor-anchored");
+    expect(result.elements).toHaveLength(1);
+    expect(result.elements[0]!.getAttribute("contenteditable")).toBe("true");
   });
 
   it("detects the original copy button within a container", () => {

@@ -119,15 +119,16 @@ describe("v1 -> v2 migration", () => {
     expect(s.appearance.compactSpacing).toBe(true);
   });
 
-  it("preserves valid v2 payloads unchanged", () => {
-    const v2 = cloneDefaults();
-    v2.enabled = false;
-    v2.preset = "work";
-    const env = toEnvelope(v2);
+  it("preserves valid v3 payloads unchanged", () => {
+    const v3 = cloneDefaults();
+    v3.enabled = false;
+    v3.preset = "work";
+    const env = toEnvelope(v3);
     const back = migrateEnvelope(env);
     expect(back).not.toBeNull();
     expect(back?.enabled).toBe(false);
     expect(back?.preset).toBe("work");
+    expect(back?.writingCopy.position).toBe("smart");
   });
 
   it("unknown future schema version fails closed to defaults", () => {
@@ -143,8 +144,72 @@ describe("v1 -> v2 migration", () => {
     expect(validateSettings(result as Settings)).toBe(true);
   });
 
-  it("current version is 2", () => {
-    expect(SETTINGS_SCHEMA_VERSION).toBe(2);
+  it("current version is 3", () => {
+    expect(SETTINGS_SCHEMA_VERSION).toBe(3);
+  });
+
+  describe("v2 -> v3 migration (Phase 4 writingCopy extension)", () => {
+    const v2Base = (): Record<string, unknown> => {
+      const s = cloneDefaults();
+      // Simulate a stored v2 payload: strip the Phase 4 fields.
+      const { markerEnabled: _m, markerColor: _mc, markerOpacity: _mo, pulseEnabled: _p, pulseColor: _pc, pulseIntensity: _pi, pulsePeriodMs: _pp, backgroundEnabled: _b, ...legacyWritingCopy } = s.writingCopy;
+      void _m; void _mc; void _mo; void _p; void _pc; void _pi; void _pp; void _b;
+      return JSON.parse(JSON.stringify({
+        enabled: s.enabled,
+        preset: s.preset,
+        appearance: s.appearance,
+        sidebar: s.sidebar,
+        history: s.history,
+        writingCopy: legacyWritingCopy,
+        codeBlocks: s.codeBlocks,
+        theme: s.theme,
+      })) as Record<string, unknown>;
+    };
+
+    function v2Envelope(v2: Record<string, unknown>): never {
+      return { schemaVersion: 2, settings: v2 } as never;
+    }
+
+    it("populates Phase 4 defaults while preserving every valid v2 setting", () => {
+      const v2 = v2Base();
+      const s = migrateEnvelope(v2Envelope(v2)) as Settings;
+      expect(s).not.toBeNull();
+      // New fields populated from defaults.
+      expect(s.writingCopy.markerEnabled).toBe(true);
+      expect(s.writingCopy.markerOpacity).toBe(30);
+      expect(s.writingCopy.pulsePeriodMs).toBe(4000);
+      expect(s.writingCopy.backgroundEnabled).toBe(false);
+      // No explicit legacy choice: position becomes the new default `smart`.
+      expect(s.writingCopy.position).toBe("smart");
+      // Old settings preserved.
+      expect(s.enabled).toBe(true);
+      expect(s.appearance.useTheme).toBe(false);
+      expect(s.theme.writingBlockBackground).toBe("#161b25");
+      expect(validateSettings(s)).toBe(true);
+    });
+
+    it("preserves an explicit legacy position choice", () => {
+      const v2 = v2Base();
+      (v2.writingCopy as Record<string, unknown>).position = "top-right";
+      (v2.writingCopy as Record<string, unknown>).enabled = true;
+      const s = migrateEnvelope(v2Envelope(v2)) as Settings;
+      expect(s.writingCopy.position).toBe("top-right");
+      expect(s.writingCopy.enabled).toBe(true);
+      // New fields still populated.
+      expect(s.writingCopy.markerEnabled).toBe(true);
+    });
+
+    it("preserves custom appearance from v2", () => {
+      const v2 = v2Base();
+      (v2 as { appearance: Record<string, unknown> }).appearance.disableAnimations = true;
+      (v2 as { sidebar: { mode: string } }).sidebar.mode = "hover";
+      (v2 as { history: { visiblePairs: number } }).history.visiblePairs = 11;
+      const s = migrateEnvelope(v2Envelope(v2)) as Settings;
+      expect(s.appearance.disableAnimations).toBe(true);
+      expect(s.sidebar.mode).toBe("hover");
+      expect(s.history.visiblePairs).toBe(11);
+      expect(s.preset).toBe("normal");
+    });
   });
 
   describe("Blocker 8: preserve valid custom v1 appearance", () => {

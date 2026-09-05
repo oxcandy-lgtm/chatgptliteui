@@ -4,7 +4,7 @@ import { cloneDefaults } from "./defaults.js";
 import { validateSettings } from "./schema.js";
 
 /**
- * Migration pipeline for stored settings (schema v1 -> v2).
+ * Migration pipeline for stored settings (schema v1/v2 -> v3).
  *
  * Rules (fail-closed):
  *  - Detect the stored schema version first.
@@ -12,6 +12,9 @@ import { validateSettings } from "./schema.js";
  *  - Validate the fully migrated result.
  *  - Fall back to defaults on malformed or unknown data.
  *  - Never persist unknown keys.
+ *  - v3 adds Phase 4 writingCopy presentation fields; migration preserves
+ *    every valid older setting and populates the new fields from defaults
+ *    (position keeps an explicit legacy choice, otherwise `smart`).
  */
 
 /** Best-effort structural shape of the v1 stored settings payload. */
@@ -194,7 +197,14 @@ function migrateV1(v1: V1Settings): Settings {
   if (isObject(v1.writingCopy)) {
     const w = v1.writingCopy as Record<string, unknown>;
     if (isBoolean(w.enabled)) next.writingCopy.enabled = w.enabled;
-    if (typeof w.position === "string") next.writingCopy.position = w.position as Settings["writingCopy"]["position"];
+    const LEGACY_POSITIONS = ["top-right", "middle-right", "bottom-right"] as const;
+    if (
+      typeof w.position === "string" &&
+      (LEGACY_POSITIONS as readonly string[]).includes(w.position)
+    ) {
+      // Preserve an explicit legacy position choice (Phase 4 default `smart`).
+      next.writingCopy.position = w.position as Settings["writingCopy"]["position"];
+    }
     if (isBoolean(w.shortcutEnabled)) next.writingCopy.shortcutEnabled = w.shortcutEnabled;
   }
   if (isObject(v1.codeBlocks)) {
@@ -276,6 +286,46 @@ const MIGRATIONS: Record<number, Migration> = {
   1: (_current, raw) => {
     if (!isObject(raw)) return cloneDefaults();
     return migrateV1(raw as V1Settings);
+  },
+  2: (_current, raw) => {
+    if (!isObject(raw)) return cloneDefaults();
+    const next = cloneDefaults();
+    const v2 = raw as Partial<Settings>;
+    // Carry every valid v2 section; the writingCopy Phase 4 fields stay at
+    // defaults, while an explicit legacy position choice is preserved.
+    next.enabled = isBoolean(v2.enabled) ? v2.enabled : next.enabled;
+    if (
+      typeof v2.preset === "string" &&
+      (PRESETS_V1.has(v2.preset) || v2.preset === "custom")
+    ) {
+      next.preset = v2.preset;
+    }
+    const a = isObject(v2.appearance) ? (v2.appearance as unknown) : undefined;
+    if (a) Object.assign(next.appearance, a);
+    const sb = isObject(v2.sidebar) ? (v2.sidebar as unknown) : undefined;
+    if (sb) Object.assign(next.sidebar, sb);
+    const h = isObject(v2.history) ? (v2.history as unknown) : undefined;
+    if (h) Object.assign(next.history, h);
+    const w = isObject(v2.writingCopy)
+      ? (v2.writingCopy as unknown as Record<string, unknown>)
+      : undefined;
+    if (w) {
+      if (isBoolean(w.enabled)) next.writingCopy.enabled = w.enabled;
+      const LEGACY_POSITIONS = ["top-right", "middle-right", "bottom-right"] as const;
+      if (
+        typeof w.position === "string" &&
+        (LEGACY_POSITIONS as readonly string[]).includes(w.position)
+      ) {
+        // Preserve an explicit legacy position choice.
+        next.writingCopy.position = w.position as Settings["writingCopy"]["position"];
+      }
+      if (isBoolean(w.shortcutEnabled)) next.writingCopy.shortcutEnabled = w.shortcutEnabled;
+    }
+    const c = isObject(v2.codeBlocks) ? (v2.codeBlocks as unknown) : undefined;
+    if (c) Object.assign(next.codeBlocks, c);
+    const t = isObject(v2.theme) ? (v2.theme as unknown) : undefined;
+    if (t) Object.assign(next.theme, t);
+    return next;
   },
 };
 

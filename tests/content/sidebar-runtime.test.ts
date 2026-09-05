@@ -5,12 +5,21 @@ import type { Settings } from "../../src/shared/types.js";
 
 class FakeMutationObserver {
   static last: FakeMutationObserver | null = null;
+  static instances: FakeMutationObserver[] = [];
+  /** Most recent STRUCTURAL observer (excludes the tagged sidebar observer). */
+  static structuralLast(): FakeMutationObserver | null {
+    const list = FakeMutationObserver.instances.filter(
+      (o) => !(o as unknown as Record<string, unknown>).cglSidebarColorObserver,
+    );
+    return list.length > 0 ? list[list.length - 1]! : null;
+  }
   cb: (mutations: MutationRecord[], obs: FakeMutationObserver) => void;
   target: Node | null = null;
   disconnected = false;
   constructor(cb: (mutations: MutationRecord[], obs: FakeMutationObserver) => void) {
     this.cb = cb;
     FakeMutationObserver.last = this;
+    FakeMutationObserver.instances.push(this);
   }
   observe(target: Node): void {
     this.target = target;
@@ -120,7 +129,7 @@ describe("sidebar content runtime + keyboard", () => {
     const chromeStub = {
       storage: {
         local: {
-          get: (k: string) => Promise.resolve({ [k]: { schemaVersion: 2, settings: lastEnv } }),
+          get: (k: string) => Promise.resolve({ [k]: { schemaVersion: 3, settings: lastEnv } }),
           set: (_v: unknown) => Promise.resolve(),
         },
         onChanged: { addListener: (cb: (changes: Record<string, unknown>, area: string) => void) => {
@@ -147,6 +156,7 @@ describe("sidebar content runtime + keyboard", () => {
     delete g.Node;
     delete g.chrome;
     FakeMutationObserver.last = null;
+    FakeMutationObserver.instances = [];
   });
 
   function sidebarEl(): Element {
@@ -160,7 +170,7 @@ describe("sidebar content runtime + keyboard", () => {
   it("non-visible sidebar mode activates structural observation even on Normal appearance", async () => {
     await mod.syncRuntime(makeSettings({ preset: "normal", sidebar: { mode: "hidden" } }));
     await new Promise((r) => setTimeout(r, 0));
-    const obs = FakeMutationObserver.last!;
+    const obs = FakeMutationObserver.structuralLast()!;
     expect(obs.disconnected).toBe(false);
     expect(obs.target).not.toBe(dom.window.document.body);
   });
@@ -168,7 +178,7 @@ describe("sidebar content runtime + keyboard", () => {
   it("visible + Normal has no structural observer", async () => {
     await mod.syncRuntime(makeSettings({ preset: "normal", sidebar: { mode: "visible" } }));
     await new Promise((r) => setTimeout(r, 0));
-    const obs = FakeMutationObserver.last;
+    const obs = FakeMutationObserver.structuralLast();
     expect(obs === null || obs.disconnected).toBe(true);
     expect(dom.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(false);
   });
@@ -189,7 +199,7 @@ describe("sidebar content runtime + keyboard", () => {
     setEnv(makeSettings({ preset: "normal", sidebar: { mode: "hidden" } }));
     await mod.syncRuntime(makeSettings({ preset: "normal", sidebar: { mode: "hidden" } }));
     await new Promise((r) => setTimeout(r, 0));
-    const first = FakeMutationObserver.last!;
+    const first = FakeMutationObserver.structuralLast()!;
     expect(first.target).toBe(bodyOnly.window.document.body);
 
     bodyOnly.window.document.body.innerHTML = `
@@ -199,7 +209,7 @@ describe("sidebar content runtime + keyboard", () => {
       </div>`;
     first.trigger([bodyOnly.window.document.getElementById("app")!]);
     await flushDebounce();
-    const second = FakeMutationObserver.last!;
+    const second = FakeMutationObserver.structuralLast()!;
     expect(second.target).not.toBe(bodyOnly.window.document.body);
     expect(second.target).toBe(bodyOnly.window.document.getElementById("app"));
   });
@@ -207,20 +217,20 @@ describe("sidebar content runtime + keyboard", () => {
   it("extension host mutation does not trigger a refresh loop", async () => {
     await mod.syncRuntime(makeSettings({ preset: "normal", sidebar: { mode: "hidden" } }));
     await new Promise((r) => setTimeout(r, 0));
-    const obs = FakeMutationObserver.last!;
+    const obs = FakeMutationObserver.structuralLast()!;
     const host = dom.window.document.createElement("div");
     host.id = "cgl-sidebar-control-host";
     dom.window.document.body.appendChild(host);
-    const before = FakeMutationObserver.last;
+    const before = FakeMutationObserver.structuralLast();
     obs.trigger([host]);
     await flushDebounce();
-    expect(FakeMutationObserver.last).toBe(before);
+    expect(FakeMutationObserver.structuralLast()).toBe(before);
   });
 
   it("sidebar replacement gets rebound (marker moves to new element)", async () => {
     await mod.syncRuntime(makeSettings({ preset: "normal", sidebar: { mode: "hidden" } }));
     await new Promise((r) => setTimeout(r, 0));
-    const obs = FakeMutationObserver.last!;
+    const obs = FakeMutationObserver.structuralLast()!;
     sidebarEl().remove();
     const newAside = dom.window.document.createElement("aside");
     newAside.setAttribute("data-testid", "sidebar");
@@ -314,20 +324,20 @@ describe("sidebar content runtime + keyboard", () => {
   it("Visible + Normal initially has no observer", async () => {
     await mod.syncRuntime(makeSettings({ preset: "normal", sidebar: { mode: "visible" } }));
     await new Promise((r) => setTimeout(r, 0));
-    const obs = FakeMutationObserver.last;
+    const obs = FakeMutationObserver.structuralLast();
     expect(obs === null || obs.disconnected).toBe(true);
   });
 
   it("shortcut hides Visible sidebar and attaches one observer", async () => {
     await mod.syncRuntime(makeSettings({ preset: "normal", sidebar: { mode: "visible" } }));
     await new Promise((r) => setTimeout(r, 0));
-    expect(FakeMutationObserver.last === null || FakeMutationObserver.last!.disconnected).toBe(true);
+    expect(FakeMutationObserver.structuralLast() === null || FakeMutationObserver.structuralLast()!.disconnected).toBe(true);
     // Toggle via the real handler.
     mod.handleKeydown(keyEvent(dom.window, { alt: true, shift: true }));
     await new Promise((r) => setTimeout(r, 20));
     expect(dom.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(true);
-    expect(FakeMutationObserver.last!.disconnected).toBe(false);
-    expect(FakeMutationObserver.last!.target).not.toBe(dom.window.document.body);
+    expect(FakeMutationObserver.structuralLast()!.disconnected).toBe(false);
+    expect(FakeMutationObserver.structuralLast()!.target).not.toBe(dom.window.document.body);
   });
 
   it("sidebar replacement is rebound while temporarily hidden (Visible)", async () => {
@@ -335,7 +345,7 @@ describe("sidebar content runtime + keyboard", () => {
     await new Promise((r) => setTimeout(r, 0));
     mod.handleKeydown(keyEvent(dom.window, { alt: true, shift: true }));
     await new Promise((r) => setTimeout(r, 20));
-    const obs = FakeMutationObserver.last!;
+    const obs = FakeMutationObserver.structuralLast()!;
     // Verify observer is active.
     expect(obs.disconnected).toBe(false);
     sidebarEl().remove();
@@ -367,25 +377,25 @@ describe("sidebar content runtime + keyboard", () => {
     mod.handleKeydown(keyEvent(dom.window, { alt: true, shift: true }));
     await new Promise((r) => setTimeout(r, 20));
     expect(dom.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(true);
-    expect(FakeMutationObserver.last!.disconnected).toBe(false);
+    expect(FakeMutationObserver.structuralLast()!.disconnected).toBe(false);
     // Toggle back: cleared override -> no observer.
     mod.handleKeydown(keyEvent(dom.window, { alt: true, shift: true }));
     await new Promise((r) => setTimeout(r, 20));
     expect(dom.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(false);
-    expect(FakeMutationObserver.last!.disconnected).toBe(true);
+    expect(FakeMutationObserver.structuralLast()!.disconnected).toBe(true);
   });
 
   it("no duplicate observers across toggles; final state matches effective runtime", async () => {
     await mod.syncRuntime(makeSettings({ preset: "normal", sidebar: { mode: "visible" } }));
     await new Promise((r) => setTimeout(r, 0));
     // Visible initially: no observer.
-    expect(FakeMutationObserver.last === null || FakeMutationObserver.last!.disconnected).toBe(true);
+    expect(FakeMutationObserver.structuralLast() === null || FakeMutationObserver.structuralLast()!.disconnected).toBe(true);
 
     const created: FakeMutationObserver[] = [];
     for (let i = 0; i < 4; i++) {
       mod.handleKeydown(keyEvent(dom.window, { alt: true, shift: true }));
       await new Promise((r) => setTimeout(r, 10));
-      created.push(FakeMutationObserver.last!);
+      created.push(FakeMutationObserver.structuralLast()!);
     }
 
     // Across the toggles, exactly one observer is active at any time: every
@@ -395,13 +405,13 @@ describe("sidebar content runtime + keyboard", () => {
 
     // 4 toggles from Visible => no temporary override => observer disconnected.
     expect(dom.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(false);
-    expect(FakeMutationObserver.last!.disconnected).toBe(true);
+    expect(FakeMutationObserver.structuralLast()!.disconnected).toBe(true);
 
     // Toggling back to a transient-closed state reconnects exactly one observer.
     mod.handleKeydown(keyEvent(dom.window, { alt: true, shift: true }));
     await new Promise((r) => setTimeout(r, 10));
     expect(dom.window.document.documentElement.classList.contains("cgl-sidebar-closed")).toBe(true);
-    expect(FakeMutationObserver.last!.disconnected).toBe(false);
+    expect(FakeMutationObserver.structuralLast()!.disconnected).toBe(false);
   });
 
   // ---- Fix 4: observer connect race protection (delayed storage promises) ----
@@ -411,28 +421,28 @@ describe("sidebar content runtime + keyboard", () => {
     // down and must not be reconnected by a delayed getSettings() result.
     await mod.syncRuntime(makeSettings({ preset: "work", sidebar: { mode: "hidden" } }));
     await new Promise((r) => setTimeout(r, 0));
-    expect(FakeMutationObserver.last!.disconnected).toBe(false);
+    expect(FakeMutationObserver.structuralLast()!.disconnected).toBe(false);
     await mod.syncRuntime(makeSettings({ preset: "normal", sidebar: { mode: "visible" } }));
     await flushDebounce();
-    expect(FakeMutationObserver.last!.disconnected).toBe(true);
+    expect(FakeMutationObserver.structuralLast()!.disconnected).toBe(true);
   });
 
   it("enabled -> disabled does not reconnect after a stale async result", async () => {
     await mod.syncRuntime(makeSettings({ preset: "normal", sidebar: { mode: "hidden" } }));
     await new Promise((r) => setTimeout(r, 0));
-    expect(FakeMutationObserver.last!.disconnected).toBe(false);
+    expect(FakeMutationObserver.structuralLast()!.disconnected).toBe(false);
     await mod.syncRuntime(makeSettings({ preset: "normal", sidebar: { mode: "hidden" }, enabled: false }));
     await flushDebounce();
-    expect(FakeMutationObserver.last!.disconnected).toBe(true);
+    expect(FakeMutationObserver.structuralLast()!.disconnected).toBe(true);
   });
 
   it("active -> teardown does not reconnect after a stale async result", async () => {
     await mod.syncRuntime(makeSettings({ preset: "normal", sidebar: { mode: "hidden" } }));
     await new Promise((r) => setTimeout(r, 0));
-    expect(FakeMutationObserver.last!.disconnected).toBe(false);
+    expect(FakeMutationObserver.structuralLast()!.disconnected).toBe(false);
     mod.teardown();
     await flushDebounce();
-    expect(FakeMutationObserver.last!.disconnected).toBe(true);
+    expect(FakeMutationObserver.structuralLast()!.disconnected).toBe(true);
   });
 
   // ---- Fix 5: selective transient clearing on storage changes ----
@@ -440,7 +450,7 @@ describe("sidebar content runtime + keyboard", () => {
   function fireStorageChange(next: Settings): Promise<void> {
     setEnv(next);
     const cbs = (mod as unknown as { __onChanged: ((c: Record<string, unknown>, a: string) => void)[] }).__onChanged;
-    for (const cb of cbs) cb({ settings: { newValue: { schemaVersion: 2, settings: next } } }, "local");
+    for (const cb of cbs) cb({ settings: { newValue: { schemaVersion: 3, settings: next } } }, "local");
     return new Promise((r) => setTimeout(r, 20));
   }
 
@@ -511,7 +521,7 @@ describe("sidebar content runtime + keyboard", () => {
     await mod.syncRuntime(makeSettings({ preset: "normal", sidebar: { mode: "hidden" } }));
     await new Promise((r) => setTimeout(r, 0));
     // pickObserverTarget must NOT narrow around the raw (unsafe) candidate.
-    expect(FakeMutationObserver.last!.target).toBe(dom.window.document.body);
+    expect(FakeMutationObserver.structuralLast()!.target).toBe(dom.window.document.body);
   });
 
   it("dialog-contained sidebar candidate is also rejected; observer stays on body", async () => {
@@ -521,7 +531,7 @@ describe("sidebar content runtime + keyboard", () => {
     moveAsideInto(dialog);
     await mod.syncRuntime(makeSettings({ preset: "normal", sidebar: { mode: "hidden" } }));
     await new Promise((r) => setTimeout(r, 0));
-    expect(FakeMutationObserver.last!.target).toBe(dom.window.document.body);
+    expect(FakeMutationObserver.structuralLast()!.target).toBe(dom.window.document.body);
   });
 
   it("valid sidebar later added outside main is observed and adopted (narrows)", async () => {
@@ -529,33 +539,33 @@ describe("sidebar content runtime + keyboard", () => {
     moveAsideInto(dom.window.document.querySelector("main")!);
     await mod.syncRuntime(makeSettings({ preset: "normal", sidebar: { mode: "hidden" } }));
     await new Promise((r) => setTimeout(r, 0));
-    expect(FakeMutationObserver.last!.target).toBe(dom.window.document.body);
+    expect(FakeMutationObserver.structuralLast()!.target).toBe(dom.window.document.body);
 
     // Move the aside outside main (now safe) and trigger a structural change
     // with the actually-added node.
     const app = dom.window.document.getElementById("app")!;
     const moved = dom.window.document.querySelector('[data-testid="sidebar"]') as HTMLElement;
     app.appendChild(moved);
-    FakeMutationObserver.last!.trigger([moved]);
+    FakeMutationObserver.structuralLast()!.trigger([moved]);
     await flushDebounce();
 
     // Observer reconnects to the narrower safe app root, not body.
-    expect(FakeMutationObserver.last!.target).not.toBe(dom.window.document.body);
-    expect(FakeMutationObserver.last!.target).toBe(app);
+    expect(FakeMutationObserver.structuralLast()!.target).not.toBe(dom.window.document.body);
+    expect(FakeMutationObserver.structuralLast()!.target).toBe(app);
   });
 
   it("no duplicate observer is created during safe-root recovery", async () => {
     moveAsideInto(dom.window.document.querySelector("main")!);
     await mod.syncRuntime(makeSettings({ preset: "normal", sidebar: { mode: "hidden" } }));
     await new Promise((r) => setTimeout(r, 0));
-    const first = FakeMutationObserver.last!;
+    const first = FakeMutationObserver.structuralLast()!;
 
     const app = dom.window.document.getElementById("app")!;
     const moved = dom.window.document.querySelector('[data-testid="sidebar"]') as HTMLElement;
     app.appendChild(moved);
-    FakeMutationObserver.last!.trigger([moved]);
+    FakeMutationObserver.structuralLast()!.trigger([moved]);
     await flushDebounce();
-    const second = FakeMutationObserver.last!;
+    const second = FakeMutationObserver.structuralLast()!;
 
     // The first (body) observer must be disconnected before the narrower one
     // is adopted; exactly one active observer at the end.
