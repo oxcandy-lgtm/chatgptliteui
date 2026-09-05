@@ -36,6 +36,36 @@ import type {
   CopyTransactionReceipt,
 } from "../writing-copy/writing-copy-controller.js";
 import type { FoldingReceipt } from "../folding/folding-controller.js";
+import {
+  attemptUaMemory,
+  buildPageComparison,
+  cglOwnedState,
+  clearMemorySamples,
+  collectRegions,
+  legacyJsHeap,
+  loadMemorySamples,
+  mediaPressure,
+  memoryCapabilities,
+  resourceAggregates,
+  saveMemorySample,
+  scanDocumentStructure,
+  storageSizeSummary,
+  MemoryTrace,
+} from "./xray-memory.js";
+import type {
+  DocumentMemoryStructure,
+  LegacyJsHeap,
+  MediaPressure,
+  MemoryCapabilities,
+  MemoryPageComparison,
+  MemoryTraceResult,
+  RegionMetrics,
+  RegionRankings,
+  ResourceAggregates,
+  StorageSizeSummary,
+  UaMemoryResult,
+} from "./xray-memory.js";
+import { conversationFingerprintFromLocation } from "../writing-copy/block-identity.js";
 
 /** Extension-owned diagnostic paint attributes (X-Ray-only, removed on close). */
 const PAINT_ASSISTANT_TURN = "data-cgl-xray-assistant-turn";
@@ -87,6 +117,8 @@ export interface XrayDeps {
   getCopyTransaction?: () => CopyTransactionReceipt | null;
   /** Live folding HUD receipt accessor (optional; tests may omit). */
   getFoldingReceipt?: () => FoldingReceipt | null;
+  /** Exact CGL-owned observer/rAF counts accessor (optional). */
+  getCglRuntimeCounts?: () => { observers: number; rafs: number } | null;
 }
 
 /** Root class guarding ALL diagnostic paint CSS (present only while active). */
@@ -104,12 +136,30 @@ export class XrayController {
     | (() => CopyTransactionReceipt | null)
     | null;
   private readonly getFoldingReceipt: (() => FoldingReceipt | null) | null;
+  private readonly getCglRuntimeCounts:
+    | (() => { observers: number; rafs: number } | null)
+    | null;
 
   private active = false;
   private pickerMode = false;
   private picked: PickedTargetInfo | null = null;
   private lastScan: XrayScan | null = null;
   private deepScanIncluded = false;
+
+  // --- memory observatory (manual actions only) ------------------------------
+  private memorySnapshotAt: number | null = null;
+  private memoryHeap: LegacyJsHeap | null = null;
+  private memoryUa: UaMemoryResult | null = null;
+  private memoryDocument: DocumentMemoryStructure | null = null;
+  private memoryMedia: MediaPressure | null = null;
+  private memoryResources: ResourceAggregates | null = null;
+  private memoryRegions: RegionMetrics[] | null = null;
+  private memoryRankings: RegionRankings | null = null;
+  private memoryCgl: ReturnType<typeof cglOwnedState> | null = null;
+  private memoryStorage: StorageSizeSummary | null = null;
+  private memoryTrace: MemoryTraceResult | null = null;
+  private readonly memoryTracer = new MemoryTrace();
+  private memoryNotice: string | null = null;
 
   private readonly boundPointerMove = (e: PointerEvent): void => {
     if (!this.pickerMode) return;
@@ -151,6 +201,7 @@ export class XrayController {
       deps.getWritingCopyControllerReceipt ?? null;
     this.getCopyTransaction = deps.getCopyTransaction ?? null;
     this.getFoldingReceipt = deps.getFoldingReceipt ?? null;
+    this.getCglRuntimeCounts = deps.getCglRuntimeCounts ?? null;
   }
 
   // --- state accessors -----------------------------------------------------
@@ -199,6 +250,10 @@ export class XrayController {
         this.deepScanIncluded = true;
         this.refresh();
       },
+      memorySnapshot: () => void this.takeMemorySnapshotAction(),
+      memoryTrace: () => void this.startMemoryTraceAction(),
+      memorySave: () => void this.saveMemorySampleAction(),
+      memoryClear: () => void this.clearMemorySamplesAction(),
       close: () => this.stop(),
     });
     this.refresh();
@@ -208,6 +263,8 @@ export class XrayController {
   stop(): void {
     if (!this.active && !this.host.isMounted) return;
     this.exitPickerMode();
+    this.memoryTracer.cancel();
+    this.clearMemoryState();
     this.active = false;
     this.picked = null;
     this.lastScan = null;
@@ -262,6 +319,15 @@ export class XrayController {
       return this.getFoldingReceipt();
     } catch {
       return null;
+    }
+  }
+
+  /** Exact CGL-owned observer/rAF counts, or zeros when not wired. */
+  private getCglRuntimeCountsSafe(): { observers: number; rafs: number } {
+    try {
+      return this.getCglRuntimeCounts?.() ?? { observers: 0, rafs: 0 };
+    } catch {
+      return { observers: 0, rafs: 0 };
     }
   }
 
@@ -388,7 +454,10 @@ export class XrayController {
       scan,
       { containerElement: this.adapter.detectConversationContainer().element },
       this.picked,
-      { includeDeepTree: this.deepScanIncluded },
+      {
+        includeDeepTree: this.deepScanIncluded,
+        memory: this.memoryReportSections(buildPageComparison([])),
+      },
     );
     return JSON.stringify(report, null, 2);
   }
@@ -412,7 +481,17 @@ export class XrayController {
    * "Copy AI report" button gesture. Never reads the clipboard.
    */
   private async copyReport(): Promise<void> {
-    const serialized = this.buildReport();
+    const scan = this.lastScan ?? this.scanNow();
+    const memory = this.memoryReportSections(
+      buildPageComparison(await loadMemorySamples()),
+    );
+    const report = buildXrayReport(
+      scan,
+      { containerElement: this.adapter.detectConversationContainer().element },
+      this.picked,
+      { includeDeepTree: this.deepScanIncluded, memory },
+    );
+    const serialized = JSON.stringify(report, null, 2);
     try {
       if (
         typeof navigator === "undefined" ||
@@ -424,6 +503,179 @@ export class XrayController {
     } catch {
       // Clipboard write may be refused; no retry, no execCommand fallback.
     }
+  }
+
+  // --- memory observatory actions (explicit user actions only) -------------
+
+  /** Release held memory sections (stop/close path; trace cancelled first). */
+  private clearMemoryState(): void {
+    this.memorySnapshotAt = null;
+    this.memoryHeap = null;
+    this.memoryUa = null;
+    this.memoryDocument = null;
+    this.memoryMedia = null;
+    this.memoryResources = null;
+    this.memoryRegions = null;
+    this.memoryRankings = null;
+    this.memoryCgl = null;
+    this.memoryStorage = null;
+    this.memoryTrace = null;
+    this.memoryNotice = null;
+  }
+
+  /** Assemble CGL-owned live-state inputs from wired receipts + DOM. */
+  private cglStateInputs(): {
+    writingCopyTrackedBlockCount: number;
+    writingCopyCopiedRangeCount: number;
+    foldingMountedButtonCount: number;
+    foldingRetainedTargetCount: number;
+    activeObserverCountKnownByCgl: number;
+    activeRafCountKnownByCgl: number;
+  } {
+    const receipt = this.getControllerReceipt();
+    const folding = this.lastScan?.folding ?? null;
+    const counts = this.getCglRuntimeCountsSafe();
+    return {
+      writingCopyTrackedBlockCount: receipt?.trackedBlockCount ?? 0,
+      writingCopyCopiedRangeCount: this.lastScan?.runtime.copiedRangeCount ?? 0,
+      foldingMountedButtonCount: folding?.foldingMountedButtonCount ?? 0,
+      foldingRetainedTargetCount: folding?.foldingRetainedTargetCount ?? 0,
+      activeObserverCountKnownByCgl: counts.observers,
+      activeRafCountKnownByCgl: counts.rafs,
+    };
+  }
+
+  /** Explicit "Memory Snapshot" action: full one-shot capture. */
+  private async takeMemorySnapshotAction(): Promise<void> {
+    if (!this.active) return;
+    this.memoryNotice = null;
+    try {
+      const [ua, storage, regions] = await Promise.all([
+        attemptUaMemory(),
+        storageSizeSummary(),
+        Promise.resolve().then(() => collectRegions(this.adapter)),
+      ]);
+      this.memoryHeap = legacyJsHeap();
+      this.memoryUa = ua;
+      this.memoryDocument = scanDocumentStructure(document);
+      this.memoryMedia = mediaPressure(document);
+      this.memoryResources = resourceAggregates();
+      this.memoryRegions = regions.regions;
+      this.memoryRankings = regions.rankings;
+      this.memoryCgl = cglOwnedState(this.cglStateInputs());
+      this.memoryStorage = storage;
+      this.memorySnapshotAt = Date.now();
+    } catch {
+      this.memoryNotice = "snapshot failed";
+    }
+    this.refreshPanel();
+  }
+
+  /** Explicit "Memory Trace 60s" action: 60s heap timeline with longtasks. */
+  private async startMemoryTraceAction(): Promise<void> {
+    if (!this.active || this.memoryTracer.isRunning) return;
+    this.memoryNotice = "trace running…";
+    this.refreshPanel();
+    try {
+      const result = await this.memoryTracer.start();
+      this.memoryTrace = result;
+      this.memoryNotice = null;
+    } catch {
+      this.memoryNotice = "trace failed";
+    }
+    if (this.active) this.refreshPanel();
+  }
+
+  /** Explicit "Save memory sample" action: one numeric record per page. */
+  private async saveMemorySampleAction(): Promise<void> {
+    if (!this.active) return;
+    try {
+      if (!this.memoryDocument) {
+        await this.takeMemorySnapshotAction();
+      }
+      const fp = await conversationFingerprintFromLocation();
+      const buildId =
+        this.lastScan?.runtimeHealth?.buildId ?? "unknown";
+      const ok = await saveMemorySample({
+        pageKey: fp ?? "no-identity",
+        sampleTimestamp: Date.now(),
+        buildId: buildId.slice(0, 64),
+        uaSpecificBytes: this.memoryUa?.bytes ?? null,
+        legacyUsedJsHeap: this.memoryHeap?.usedJSHeapSize ?? null,
+        nodeCount: this.memoryDocument?.totalNodes ?? 0,
+        textChars: this.memoryDocument?.totalTextChars ?? 0,
+        estimatedImageBytes:
+          this.memoryMedia?.imageDecodedRgbaEstimateBytes ?? 0,
+        estimatedCanvasBytes:
+          this.memoryMedia?.canvasBackingEstimateBytes ?? 0,
+        assistantTurnCount: (this.memoryRegions ?? []).filter(
+          (r) => r.kind === "assistant-turn",
+        ).length,
+        writingBlockCount: (this.memoryRegions ?? []).filter(
+          (r) => r.kind === "writing-block",
+        ).length,
+      });
+      this.memoryNotice = ok ? "sample saved" : "sample save failed";
+    } catch {
+      this.memoryNotice = "sample save failed";
+    }
+    this.refreshPanel();
+  }
+
+  /** Explicit "Clear memory samples" action. */
+  private async clearMemorySamplesAction(): Promise<void> {
+    if (!this.active) return;
+    try {
+      const ok = await clearMemorySamples();
+      this.memoryNotice = ok ? "samples cleared" : "clear failed";
+    } catch {
+      this.memoryNotice = "clear failed";
+    }
+    this.refreshPanel();
+  }
+
+  /** Refresh panel rows without a full structural rescan. */
+  private refreshPanel(): void {
+    if (!this.active || !this.lastScan) return;
+    this.host.setStatus(this.statusRows(this.lastScan));
+  }
+
+  /** Assemble additive memory report sections for "Copy AI report". */
+  private memoryReportSections(comparison: MemoryPageComparison): {
+    memoryCapabilities: MemoryCapabilities;
+    memorySnapshot: {
+      legacyChromiumJsHeap: LegacyJsHeap | null;
+      uaMemory: UaMemoryResult | null;
+    } | null;
+    memoryTrace: MemoryTraceResult | null;
+    memoryDocument: DocumentMemoryStructure | null;
+    memoryPressure: MediaPressure | null;
+    memoryResources: ResourceAggregates | null;
+    memoryRegions: RegionMetrics[] | null;
+    memoryRankings: RegionRankings | null;
+    memoryCgl: ReturnType<typeof cglOwnedState> | null;
+    memoryStorage: StorageSizeSummary | null;
+    memoryPageComparison: MemoryPageComparison;
+  } {
+    return {
+      memoryCapabilities: memoryCapabilities(),
+      memorySnapshot:
+        this.memorySnapshotAt === null
+          ? null
+          : {
+              legacyChromiumJsHeap: this.memoryHeap,
+              uaMemory: this.memoryUa,
+            },
+      memoryTrace: this.memoryTrace,
+      memoryDocument: this.memoryDocument,
+      memoryPressure: this.memoryMedia,
+      memoryResources: this.memoryResources,
+      memoryRegions: this.memoryRegions,
+      memoryRankings: this.memoryRankings,
+      memoryCgl: this.memoryCgl,
+      memoryStorage: this.memoryStorage,
+      memoryPageComparison: comparison,
+    };
   }
 
   // --- panel status --------------------------------------------------------
@@ -543,6 +795,70 @@ export class XrayController {
     const blocker = d.firstBlocker
       ? `BLOCKER: ${d.firstBlocker}`
       : `OK: ${d.summary}`;
+    rows.push(...this.memoryStatusRows());
     return { rows, blocker, pickerActive: this.pickerMode };
+  }
+
+  /** Compact memory observatory panel rows (only what was captured). */
+  private memoryStatusRows(): XrayStatusInput["rows"] {
+    const rows: XrayStatusInput["rows"] = [];
+    const mb = (bytes: number | null): string =>
+      bytes === null ? "n/a" : `${Math.round((bytes / 1048576) * 10) / 10} MB`;
+    if (this.memoryNotice) {
+      rows.push({ k: "memory", v: this.memoryNotice, tone: "warn" as const });
+    }
+    if (this.memoryHeap) {
+      rows.push({
+        k: "js heap used/total",
+        v: `${mb(this.memoryHeap.usedJSHeapSize)} / ${mb(this.memoryHeap.totalJSHeapSize)}`,
+      });
+    }
+    if (this.memoryUa && this.memoryUa.success && this.memoryUa.bytes !== null) {
+      rows.push({ k: "ua page bytes", v: mb(this.memoryUa.bytes) });
+    } else if (this.memoryUa && this.memoryUa.attempted && !this.memoryUa.success) {
+      rows.push({
+        k: "ua memory",
+        v: `unavailable (${this.memoryUa.errorName ?? "rejected"})`,
+        tone: "warn" as const,
+      });
+    }
+    if (this.memoryDocument) {
+      rows.push({
+        k: "dom nodes/elements",
+        v: `${this.memoryDocument.totalNodes}/${this.memoryDocument.elementNodes}`,
+      });
+      rows.push({
+        k: "dom text chars",
+        v: String(this.memoryDocument.totalTextChars),
+      });
+    }
+    if (this.memoryTrace) {
+      const t = this.memoryTrace;
+      rows.push({
+        k: "trace heap Δ",
+        v:
+          t.deltaBytes === null
+            ? "n/a"
+            : `${t.deltaBytes <= 0 ? "" : "+"}${mb(Math.abs(t.deltaBytes))}${t.deltaBytes <= 0 ? " down" : " up"}${t.dropPercent !== null && t.deltaBytes <= 0 ? ` (${t.dropPercent}%)` : ""}`,
+        tone: "pass" as const,
+      });
+      rows.push({
+        k: "trace longtasks",
+        v: `${t.longTasks.longTaskCount} (${Math.round(t.longTasks.longTaskTotalDurationMs)}ms)`,
+      });
+    } else if (this.memoryTracer.isRunning) {
+      rows.push({ k: "trace", v: "running…", tone: "warn" as const });
+    }
+    if (this.memoryCgl) {
+      rows.push({
+        k: "cgl hosts/markers",
+        v: `${this.memoryCgl.cglHostElementCount}/${this.memoryCgl.cglMarkedElementCount}`,
+      });
+      rows.push({
+        k: "cgl observers/rafs",
+        v: `${this.memoryCgl.activeObserverCountKnownByCgl}/${this.memoryCgl.activeRafCountKnownByCgl}`,
+      });
+    }
+    return rows;
   }
 }

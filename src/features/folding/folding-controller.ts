@@ -76,6 +76,11 @@ export class FoldingController {
     return this.host.isMounted;
   }
 
+  /** Whether a geometry rAF is currently pending (exact, for diagnostics). */
+  get hasPendingGeometryWork(): boolean {
+    return this.geometryRaf != null;
+  }
+
   /** Currently folded code blocks (connected only). */
   foldedCodes(): HTMLElement[] {
     return queryMarked(MARKER_CODE_FOLDED);

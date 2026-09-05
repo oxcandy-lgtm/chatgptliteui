@@ -321,6 +321,11 @@ export class WritingCopyController {
     return this.tracker.isObserving;
   }
 
+  /** Whether a geometry rAF is currently pending (exact, for diagnostics). */
+  get hasPendingGeometryWork(): boolean {
+    return this.geometryRaf != null;
+  }
+
   get candidates(): HTMLElement[] {
     return this.tracker.candidatesList;
   }

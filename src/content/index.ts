@@ -90,6 +90,7 @@ const xrayController = new XrayController({
     writingCopyController.buildReceipt(),
   getCopyTransaction: () => writingCopyController.lastTransaction,
   getFoldingReceipt: () => foldingController.foldingReceipt(),
+  getCglRuntimeCounts: () => ownedRuntimeCounts(),
 });
 const routeListener = new RouteListener();
 
@@ -884,6 +885,34 @@ export {
   handleXrayKeydown,
   hasRuntimeEffects,
 };
+
+/**
+ * Exact CGL-owned runtime counts for diagnostics: live mutation observers
+ * (structural + sidebar-color + writing-copy tracker) and pending geometry
+ * rAFs (writing-copy + folding). No guessing, no page enumeration.
+ */
+export function ownedRuntimeCounts(): { observers: number; rafs: number } {
+  let observers = 0;
+  if (observer) observers++;
+  if (sidebarColorObserver) observers++;
+  try {
+    if (writingCopyController.isObserving) observers++;
+  } catch {
+    /* ignore */
+  }
+  let rafs = 0;
+  try {
+    if (writingCopyController.hasPendingGeometryWork) rafs++;
+  } catch {
+    /* ignore */
+  }
+  try {
+    if (foldingController.hasPendingGeometryWork) rafs++;
+  } catch {
+    /* ignore */
+  }
+  return { observers, rafs };
+}
 
 if (typeof document !== "undefined") {
   if (document.readyState === "loading") {

@@ -23,6 +23,24 @@ import {
 } from "../../shared/runtime-health.js";
 import type { CopyTransactionReceipt } from "../writing-copy/writing-copy-controller.js";
 import {
+  buildPageComparison,
+  memoryCapabilities,
+} from "./xray-memory.js";
+import type {
+  CglOwnedState,
+  DocumentMemoryStructure,
+  LegacyJsHeap,
+  MediaPressure,
+  MemoryCapabilities,
+  MemoryPageComparison,
+  MemoryTraceResult,
+  RegionMetrics,
+  RegionRankings,
+  ResourceAggregates,
+  StorageSizeSummary,
+  UaMemoryResult,
+} from "./xray-memory.js";
+import {
   getActiveChatRowDiagnostic,
   type ActiveChatRowDiagnostic,
 } from "../appearance/active-chat-row.js";
@@ -122,6 +140,21 @@ export interface XrayReportV1 {
   copyTransaction: CopyTransactionReceipt | null;
   /** Folding HUD receipt (null when no controller is wired). */
   folding: XrayScan["folding"];
+  /** Memory observatory sections (additive; nulls where never captured). */
+  memoryCapabilities: MemoryCapabilities;
+  memorySnapshot: {
+    legacyChromiumJsHeap: LegacyJsHeap | null;
+    uaMemory: UaMemoryResult | null;
+  } | null;
+    memoryTrace: MemoryTraceResult | null;
+    memoryDocument: DocumentMemoryStructure | null;
+    memoryPressure: MediaPressure | null;
+    memoryResources: ResourceAggregates | null;
+    memoryRegions: RegionMetrics[] | null;
+  memoryRankings: RegionRankings | null;
+  memoryCgl: CglOwnedState | null;
+  memoryStorage: StorageSizeSummary | null;
+  memoryPageComparison: MemoryPageComparison;
   diagnosis: {
     summary: string;
     firstBlocker: string;
@@ -293,6 +326,20 @@ export interface BuildReportOptions {
   /** Include the bounded structural tree of the conversation region. */
   includeDeepTree?: boolean;
   deepTreeNodeCap?: number;
+  /** Additive memory observatory sections (defaults to empty). */
+  memory?: {
+    memoryCapabilities: MemoryCapabilities;
+    memorySnapshot: XrayReportV1["memorySnapshot"];
+    memoryTrace: MemoryTraceResult | null;
+    memoryDocument: DocumentMemoryStructure | null;
+    memoryPressure: MediaPressure | null;
+    memoryResources: ResourceAggregates | null;
+    memoryRegions: RegionMetrics[] | null;
+    memoryRankings: RegionRankings | null;
+    memoryCgl: CglOwnedState | null;
+    memoryStorage: StorageSizeSummary | null;
+    memoryPageComparison: MemoryPageComparison;
+  };
 }
 
 /** Manually picked target captured by the one-shot element picker. */
@@ -365,6 +412,18 @@ export function buildXrayReport(
     writingCopyController: scan.writingCopyController,
     copyTransaction: scan.copyTransaction,
     folding: scan.folding,
+    memoryCapabilities: options.memory?.memoryCapabilities ?? memoryCapabilities(),
+    memorySnapshot: options.memory?.memorySnapshot ?? null,
+    memoryTrace: options.memory?.memoryTrace ?? null,
+    memoryDocument: options.memory?.memoryDocument ?? null,
+    memoryPressure: options.memory?.memoryPressure ?? null,
+    memoryResources: options.memory?.memoryResources ?? null,
+    memoryRegions: options.memory?.memoryRegions ?? null,
+    memoryRankings: options.memory?.memoryRankings ?? null,
+    memoryCgl: options.memory?.memoryCgl ?? null,
+    memoryStorage: options.memory?.memoryStorage ?? null,
+    memoryPageComparison:
+      options.memory?.memoryPageComparison ?? buildPageComparison([]),
     diagnosis: {
       summary: diagnose(scan).summary,
       firstBlocker: diagnose(scan).firstBlocker,

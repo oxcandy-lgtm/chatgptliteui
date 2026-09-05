@@ -93,6 +93,10 @@ export class XrayHost {
     pick: () => void;
     copy: () => void;
     deep: () => void;
+    memorySnapshot?: () => void;
+    memoryTrace?: () => void;
+    memorySave?: () => void;
+    memoryClear?: () => void;
     close: () => void;
   }): void {
     if (this.isMounted) return;
@@ -158,6 +162,10 @@ export class XrayHost {
     this.pickBtnRef = mk("Pick element", handlers.pick);
     mk("Copy AI report", handlers.copy);
     mk("Deep scan", handlers.deep);
+    if (handlers.memorySnapshot) mk("Memory Snapshot", handlers.memorySnapshot);
+    if (handlers.memoryTrace) mk("Memory Trace 60s", handlers.memoryTrace);
+    if (handlers.memorySave) mk("Save sample", handlers.memorySave);
+    if (handlers.memoryClear) mk("Clear samples", handlers.memoryClear);
     mk("Close X-Ray", handlers.close);
     panel.appendChild(btns);
 
